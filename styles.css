@@ -1,0 +1,32 @@
+
+* {
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    background-color: gray;
+    text-align: center;
+    padding-top: 40px;
+}
+
+canvas {
+    background-color: white;
+    border: solid 1px black;
+    image-rendering: pixelated;
+}
+
+#cpu {
+    text-align: left;
+    left: 10px;
+    top: 80px;
+    position: absolute;
+}
+
+#cpu ul {
+    padding-left: 20px;
+}
+
+.red {
+    color: rgb(189, 0, 0);
+}

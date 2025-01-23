@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WATBOY_JS</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="cpu.js"></script>
+    <script src="gpu.js"></script>
+    <script src="gameboy.js"></script>
+    <script src="watboy.js"></script>
+    <script src="input.js"></script>
+</head>
+<body>
+    <div id="cpu">
+        <div id="registers">
+            <p>Registers:</p>
+            <ul>
+                <li>A: <span id=reg_a></span></li>
+                <li>B: <span id=reg_b></span></li>
+                <li>C: <span id=reg_c></span></li>
+                <li>D: <span id=reg_d></span></li>
+                <li>E: <span id=reg_e></span></li>
+                <li>F: <span id=reg_f></span></li>
+                <li>H: <span id=reg_h></span></li>
+                <li>L: <span id=reg_l></span></li>
+                <li>Stack Pointer (SP): <span id=reg_sp></span></li>
+                <li>Program Counter (PC): <span id=reg_pc></span></li>
+            </ul>
+        </div>
+
+        <div id="flags">
+            <p>Flags:</p>
+            <ul>
+                <li>Interrups Enabled: <span id=flags_ie></span></li>
+            </ul>
+        </div>
+
+        <div id="instructions">
+            <p>Instructions:</p>
+            <ul>
+                <li>Last instruction: <span id=last_inst></span></li>
+            </ul>
+        </div>
+
+    </div>
+    <canvas id="myCanvas" width="160" height="144"></canvas>
+    <div>
+        <input type="file" name="fileInput" id="fileInput">
+    </div>
+</body>
+</html>
