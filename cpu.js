@@ -250,7 +250,8 @@ class GameBoyCPU {
     start() {
         if (this.BIOSLoaded) {
             this.registers.PC = 0x0000;
-        } else {
+        }
+        else {
             this.registers.PC = 0x0100;
         }
     }
@@ -394,7 +395,8 @@ class GameBoyCPU {
                 if ((this.registers.F & 0x80) === 0) {
                     // If Zero flag is not set, perform the jump
                     this.registers.PC += offset; // Jump to the new address (PC + signed offset)
-                } else {
+                }
+                else {
                     // If Zero flag is set, do nothing (just increment PC normally)
                     this.registers.PC++; // Move to the next instruction
                 }
@@ -421,7 +423,8 @@ class GameBoyCPU {
                 this.registers.F &= ~0x40;         // Clear N flag (bit 6)
                 if ((this.registers.A & 0x0F) === 0) {
                     this.registers.F |= 0x20;      // Set H flag (bit 5) if carry from bit 3
-                } else {
+                }
+                else {
                     this.registers.F &= ~0x20;     // Clear H flag (bit 5)
                 }
 
@@ -546,7 +549,8 @@ class GameBoyCPU {
                     this.memory[this.registers.SP + 1] = ((this.registers.PC + 3) >> 8);    // Store higher byte of PC
 
                     this.registers.PC = address; // Jump to the subroutine
-                } else {
+                }
+                else {
                     this.registers.PC += 3; // Skip the immediate value if condition is not met
                 }
                 break;
@@ -599,7 +603,8 @@ class GameBoyCPU {
                     this.memory[this.registers.SP + 1] = ((this.registers.PC + 3) >> 8);    // Store higher byte of PC
             
                     this.registers.PC = address; // Jump to the subroutine
-                } else {
+                }
+                else {
                     this.registers.PC += 3; // Skip the immediate value if condition is not met
                 }
                 break;
@@ -651,7 +656,8 @@ class GameBoyCPU {
     setZeroFlag(value) {
         if (value === 0) {
             this.registers.F |= 0x80; // Set Z flag (bit 7)
-        } else {
+        }
+        else {
             this.registers.F &= ~0x80; // Clear Z flag (bit 7)
         }
     }
@@ -670,7 +676,8 @@ class GameBoyCPU {
         // Half carry occurs if there's a borrow from bit 4
         if (((A & 0xF) - (n & 0xF)) < 0) {
             this.registers.F |= 0x20; // Set H flag (bit 5)
-        } else {
+        }
+        else {
             this.registers.F &= ~0x20; // Clear H flag (bit 5)
         }
     }
@@ -679,7 +686,8 @@ class GameBoyCPU {
     setCarryFlag(result) {
         if (result < 0) {
             this.registers.F |= 0x10; // Set C flag (bit 4)
-        } else {
+        }
+        else {
             this.registers.F &= ~0x10; // Clear C flag (bit 4)
         }
     }
@@ -689,21 +697,24 @@ class GameBoyCPU {
         // Set Zero flag
         if ((result & 0xFF) === 0) {
             this.registers.F |= 0x80; // Set Z flag
-        } else {
+        }
+        else {
             this.registers.F &= ~0x80; // Clear Z flag
         }
 
         // Set the Carry flag (if result overflows 8 bits)
         if (result > 0xFF) {
             this.registers.F |= 0x10; // Set C flag (bit 4)
-        } else {
+        }
+        else {
             this.registers.F &= ~0x10; // Clear C flag (bit 4)
         }
 
         // Set the Half Carry flag (if carry from bit 3 to 4)
         if (((this.registers.A & 0xF) + (result & 0xF)) > 0xF) {
             this.registers.F |= 0x20; // Set H flag (bit 5)
-        } else {
+        }
+        else {
             this.registers.F &= ~0x20; // Clear H flag (bit 5)
         }
 
@@ -951,7 +962,8 @@ class GameBoyCPU {
         this.registers.F &= ~0x40;         // Clear N flag (bit 6)
         if ((this.registers.A & 0x0F) === 0) {
             this.registers.F |= 0x20;      // Set H flag (bit 5) if carry from bit 3
-        } else {
+        }
+        else {
             this.registers.F &= ~0x20;     // Clear H flag (bit 5)
         }
 
@@ -1169,7 +1181,8 @@ class GameBoyCPU {
             this.memory[this.registers.SP + 1] = ((this.registers.PC + 3) >> 8);    // Store higher byte of PC
     
             this.registers.PC = address; // Jump to the subroutine
-        } else {
+        }
+        else {
             this.registers.PC += 3; // Skip the immediate value if condition is not met
         }
     }
