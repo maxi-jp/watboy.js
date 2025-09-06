@@ -12,13 +12,6 @@ class GameBoy {
         this.gpu = new GameBoyGPU(canvas, ctx, this.screenWidth, this.screenHeight);
     }
     
-    UpdateFrameBuffer() {
-        for (let i = 0; i < this.screenWidth * this.screenHeight; i++) {
-            const vramAddress = 0x8000 + i;  // Calculate corresponding VRAM address
-            this.gpu.frameBuffer[i] = this.cpu.memory[vramAddress]; // Fetch pixel data
-        }
-    }
-
     LoadRom(romData) {
         this.romLoaded = romData;
         this.cpu.loadROM(romData);
@@ -26,12 +19,14 @@ class GameBoy {
         //gameboy.cpu.run(); 
     }
 
-    RunFullCycle() {
-        let vblank = false;
-        while (!vblank) {
-            this.cpu.runStep();
+    RunFrame() {
+        const cyclesPerFrame = 70224; // Number of CPU cycles per frame
+        let cyclesThisFrame = 0;
 
-            vblank = this.gpu.update();
+        while (cyclesThisFrame < cyclesPerFrame) {
+            const cycles = this.cpu.runStep();
+            cyclesThisFrame += cycles;
+            this.gpu.update(cycles);
         }
     }
 

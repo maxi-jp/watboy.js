@@ -1,5 +1,6 @@
 // GameBoy CPU Manual https://news.ycombinator.com/item?id=19663009
 // test rooms https://github.com/retrio/gb-test-roms
+// instruction set https://www.pastraiser.com/cpu/gameboy/gameboy_opcodes.html
 
 
 var canvas = /** @type {HTMLCanvasElement} */(null);
@@ -112,11 +113,8 @@ function Loop() {
 }
 
 function Update(deltaTime) {
-    gameboy.RunCPUStep();
-
+    gameboy.RunFrame();
     updateDebugData();
-
-    gameboy.UpdateFrameBuffer();
 }
 
 function Draw(/** @type {CanvasRenderingContext2D} */ctx) {

@@ -24,6 +24,7 @@ class GameBoyGPU {
 
     update(cycles) {
         this.modeClock += cycles;
+        
         let vblank = false;
 
         switch (this.mode) {
