@@ -466,13 +466,6 @@ class GameBoyCPU {
     }
 
     runStep() {
-        // The EI instruction enables interrupts AFTER the instruction following it has been executed.
-        // We check this flag at the beginning of the loop to achieve that delay.
-        if (this.imeScheduled) {
-            this.enableInterrupts();
-            this.imeScheduled = false;
-        }
-
         const interruptCycles = this.handleInterrupts();
         if (interruptCycles > 0) {
             return interruptCycles;
@@ -512,6 +505,12 @@ class GameBoyCPU {
             this.registers.PC++; // Skip the unhandled opcode
         }
 
+        // The EI instruction enables interrupts AFTER the next instruction is executed.
+        // We check the flag here, at the end of the cycle, to achieve that delay.
+        if (this.imeScheduled) {
+            this.enableInterrupts();
+            this.imeScheduled = false;
+        }
         return elapsedClockTicks;
     }
 
@@ -523,20 +522,12 @@ class GameBoyCPU {
     add(value) {
         const originalA = this.registers.A;
         const result = originalA + value;
-        this.registers.A = result & 0xFF; // Keep only the lower 8 bits
+        this.registers.A = result & 0xFF;
 
-        // Update flags
-        this.registers.F = 0; // Clear N, H, C flags. Z is set based on result.
-        if (this.registers.A === 0) {
-            this.registers.F |= 0x80; // Set Z flag
-        }
-        // N flag is cleared for additions
-        if ((originalA & 0xF) + (value & 0xF) > 0xF) {
-            this.registers.F |= 0x20; // Set H flag
-        }
-        if (result > 0xFF) {
-            this.registers.F |= 0x10; // Set C flag
-        }
+        this.setZeroFlag(this.registers.A);
+        this.clearSubtractFlag();
+        this.setHalfCarryFlagForAdd(originalA, value);
+        this.setCarryFlag(result > 0xFF);
     }
 
     // Helper function for 16-bit additions (ADD HL, rr)
@@ -875,6 +866,7 @@ class GameBoyCPU {
         // Update the flags
         this.setZeroFlag(this.registers.B);
         this.setSubtractFlag();
+        this.setHalfCarryFlag(originalB, 1);
 
         this.registers.PC++;
         return 4;
@@ -955,9 +947,9 @@ class GameBoyCPU {
         this.registers.C = (this.registers.C - 1) & 0xFF; // Decrement C and ensure it stays within 8 bits
     
         // Update the flags
-        this.setZeroFlag(this.registers.C); // Set Z flag if result is 0
-        this.setSubtractFlag();            // Set N flag since this is a subtraction
-        this.setHalfCarryFlag(originalC, 1); // Check for half-carry during subtraction
+        this.setZeroFlag(this.registers.C);
+        this.setSubtractFlag();
+        this.setHalfCarryFlag(originalC, 1);
     
         this.registers.PC++;
         return 4;
@@ -1015,8 +1007,7 @@ class GameBoyCPU {
         // Update flags (Z, N, H)
         this.setZeroFlag(this.registers.D);
         this.setSubtractFlag();
-        this.setHalfCarryFlag(originalD, 1); // Check for borrow from bit 4
-        // C flag is not affected
+        this.setHalfCarryFlag(originalD, 1);
 
         this.registers.PC++;
         return 4;
@@ -1112,6 +1103,7 @@ class GameBoyCPU {
         // Update flags (Z, N, H)
         this.setZeroFlag(this.registers.E);
         this.setSubtractFlag();
+        this.setHalfCarryFlag(originalE, 1);
 
         this.registers.PC++;
         return 4;
@@ -1218,6 +1210,7 @@ class GameBoyCPU {
         // Update flags (Z, N, H)
         this.setZeroFlag(this.registers.H);
         this.setSubtractFlag();
+        this.setHalfCarryFlag(originalH, 1);
 
         this.registers.PC++;
         return 4;
