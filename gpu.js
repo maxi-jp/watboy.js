@@ -24,6 +24,16 @@ class GameBoyGPU {
     }
 
     update(cycles) {
+        // If LCD is disabled, GPU is idle and LY is 0.
+        const lcdc = this.memory[0xFF40];
+        if ((lcdc & 0x80) === 0) {
+            this.modeClock = 0;
+            this.line = 0;
+            this.memory[0xFF44] = 0;
+            this.mode = GPU_MODES.HBLANK;
+            return false;
+        }
+
         this.modeClock += cycles;
         
         let vblank = false;
@@ -33,12 +43,15 @@ class GameBoyGPU {
                 if (this.modeClock >= 204) {
                     this.modeClock = 0;
                     this.line++;
-                    if (this.line == 143) {
-                        this.mode = 1; // Enter VBlank
+                    this.memory[0xFF44] = this.line; // Update LY register
+                    if (this.line === 144) {
+                        this.mode = GPU_MODES.VBLANK; // Enter VBlank
+                        this.memory[0xFF0F] |= 0x01; // Request V-Blank Interrupt
                         vblank = true;
                         this.drawFrame();
-                    } else {
-                        this.mode = 2; // Enter OAM search
+                    }
+                    else {
+                        this.mode = GPU_MODES.OAM_SEARCH; // Enter OAM search
                     }
                 }
                 break;
@@ -46,22 +59,24 @@ class GameBoyGPU {
                 if (this.modeClock >= 456) {
                     this.modeClock = 0;
                     this.line++;
+                    this.memory[0xFF44] = this.line; // Update LY register
                     if (this.line > 153) {
-                        this.mode = 2; // Enter OAM search
+                        this.mode = GPU_MODES.OAM_SEARCH; // Enter OAM search
                         this.line = 0;
+                        this.memory[0xFF44] = this.line; // Update LY register
                     }
                 }
                 break;
             case GPU_MODES.OAM_SEARCH: // OAM search
                 if (this.modeClock >= 80) {
                     this.modeClock = 0;
-                    this.mode = 3; // Enter drawing pixels
+                    this.mode = GPU_MODES.DRAWING; // Enter drawing pixels
                 }
                 break;
             case GPU_MODES.DRAWING: // Drawing pixels
                 if (this.modeClock >= 172) {
                     this.modeClock = 0;
-                    this.mode = 0; // Enter HBlank
+                    this.mode = GPU_MODES.HBLANK; // Enter HBlank
                     this.drawScanline();
                 }
                 break;

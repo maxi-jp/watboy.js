@@ -26,6 +26,19 @@ class GameBoyCPU {
             lastPC: 0 // copy of the last PC
         };
 
+        // Flags map -------------
+        // Instruction Z  N  H  C
+        // INC	       ✔  0  ✔  -
+        // DEC	       ✔  1  ✔  -
+        // ADD	       ✔  0  ✔  ✔
+        // ADC	       ✔  0  ✔  ✔
+        // SUB	       ✔  1  ✔  ✔
+        // SBC	       ✔  1  ✔  ✔
+        // CP	       ✔  1  ✔  ✔
+        // AND	       ✔  0  1  0
+        // OR/XOR      ✔  0  0  0
+        // DAA         ✔  -  0  ✔
+
         this.memory = new Uint8Array(0x10000); // 64KB memory 
         // ROM bank 0 (16KB): 0x0000–0x3FFF
         // Switchable ROM bank (16KB): 0x4000–0x7FFF
@@ -42,6 +55,8 @@ class GameBoyCPU {
 
         this.memoryBankSize = 0x4000; // 2KB
 
+        this.serialBuffer = "";
+
         this.MBC = null;
 
         this.BIOSLoaded = false;
@@ -50,6 +65,8 @@ class GameBoyCPU {
         this.interruptsEnabled = false; // Disable interrupt handling
         this.stopEnabled = false;
         this.haltEnabled = false;
+        this.imeScheduled = false; // Flag to delay enabling interrupts
+        this.haltBug = false;
 
         this.opcodeHandlers = {
             0x00: this.opcodeNOP.bind(this),
@@ -77,7 +94,9 @@ class GameBoyCPU {
             0x16: this.opcodeLD_D_n.bind(this),
             0x17: this.opcodeRLA.bind(this),
             0x18: this.opcodeJR_n.bind(this),
+            0x19: this.opcodeADD_HL_DE.bind(this),
             0x1A: this.opcodeLD_A_DE.bind(this),
+            0x1B: this.opcodeDEC_DE.bind(this),
             0x1C: this.opcodeINC_E.bind(this),
             0x1D: this.opcodeDEC_E.bind(this),
             0x1E: this.opcodeLD_E_n.bind(this),
@@ -93,23 +112,41 @@ class GameBoyCPU {
             0x28: this.opcodeJR_Z_n.bind(this),
             0x29: this.opcodeADD_HL_HL.bind(this),
             0x2A: this.opcodeLD_A_HLplus.bind(this),
+            0x2B: this.opcodeDEC_HL.bind(this),
             0x2C: this.opcodeINC_L.bind(this),
             0x2D: this.opcodeDEC_L.bind(this),
             0x2E: this.opcodeLD_L_n.bind(this),
+            0x2F: this.opcodeCPL.bind(this),
             0x30: this.opcodeJR_NC_n.bind(this),
             0x31: this.opcodeLD_SP_nn.bind(this),
             0x32: this.opcodeLD_HLm_A.bind(this),
             0x33: this.opcodeINC_SP.bind(this),
+            0x34: this.opcodeINC_HL_mem.bind(this),
             0x35: this.opcodeDEC_HL_mem.bind(this),
+            0x36: this.opcodeLD_HL_n.bind(this),
+            0x37: this.opcodeSCF.bind(this),
             0x38: this.opcodeJR_C_n.bind(this),
+            0x39: this.opcodeADD_HL_SP.bind(this),
+            0x3A: this.opcodeLD_A_HLminus.bind(this),
             0x3B: this.opcodeDEC_SP.bind(this),
             0x3C: this.opcodeINC_A.bind(this),
             0x3D: this.opcodeDEC_A.bind(this),
             0x3E: this.opcodeLD_A_n.bind(this),
+            0x3F: this.opcodeCCF.bind(this),
             0x40: this.opcodeLD_B_B.bind(this),
+            0x41: this.opcodeLD_B_C.bind(this),
+            0x42: this.opcodeLD_B_D.bind(this),
+            0x43: this.opcodeLD_B_E.bind(this),
             0x44: this.opcodeLD_B_H.bind(this),
+            0x45: this.opcodeLD_B_L.bind(this),
             0x46: this.opcodeLD_B_HL.bind(this),
             0x47: this.opcodeLD_B_A.bind(this),
+            0x48: this.opcodeLD_C_B.bind(this),
+            0x49: this.opcodeLD_C_C.bind(this),
+            0x4A: this.opcodeLD_C_D.bind(this),
+            0x4B: this.opcodeLD_C_E.bind(this),
+            0x4C: this.opcodeLD_C_H.bind(this),
+            0x4D: this.opcodeLD_C_L.bind(this),
             0x4E: this.opcodeLD_C_HL.bind(this),
             0x4F: this.opcodeLD_C_A.bind(this),
             0x50: this.opcodeLD_D_B.bind(this),
@@ -119,6 +156,7 @@ class GameBoyCPU {
             0x5D: this.opcodeLD_E_L.bind(this),
             0x5E: this.opcodeLD_E_HL.bind(this),
             0x5F: this.opcodeLD_E_A.bind(this),
+            0x60: this.opcodeLD_H_B.bind(this),
             0x62: this.opcodeLD_H_D.bind(this),
             0x66: this.opcodeLD_H_HL.bind(this),
             0x67: this.opcodeLD_H_A.bind(this),
@@ -129,6 +167,7 @@ class GameBoyCPU {
             0x71: this.opcodeLD_HL_C.bind(this),
             0x72: this.opcodeLD_HL_D.bind(this),
             0x73: this.opcodeLD_HL_E.bind(this),
+            0x75: this.opcodeLD_HL_L.bind(this),
             0x76: this.opcodeHALT.bind(this),
             0x77: this.opcodeLD_HL_A.bind(this),
             0x78: this.opcodeLD_A_B.bind(this),
@@ -142,23 +181,35 @@ class GameBoyCPU {
             0x80: this.opcodeADD_A_B.bind(this),
             0x81: this.opcodeADD_A_C.bind(this),
             0x83: this.opcodeADD_A_E.bind(this),
+            0x84: this.opcodeADD_A_H.bind(this),
+            0x85: this.opcodeADD_A_L.bind(this),
+            0x86: this.opcodeADD_A_HL_mem.bind(this),
+            0x87: this.opcodeADD_A_A.bind(this),
             0x88: this.opcodeADC_A_B.bind(this),
             0x89: this.opcodeADC_A_C.bind(this),
             0x8C: this.opcodeADC_A_H.bind(this),
             0x91: this.opcodeSUB_C.bind(this),
             0x94: this.opcodeSUB_A_H.bind(this),
+            0x9A: this.opcodeSBC_A_D.bind(this),
+            0xA1: this.opcodeAND_C.bind(this),
+            0xA7: this.opcodeAND_A.bind(this),
             0xA9: this.opcodeXOR_C.bind(this),
             0xAD: this.opcodeXOR_L.bind(this),
             0xAE: this.opcodeXOR_HL.bind(this),
             0xAF: this.opcodeXOR_A_A.bind(this),
             0xB0: this.opcodeOR_B.bind(this),
             0xB1: this.opcodeOR_C.bind(this),
+            0xB4: this.opcodeOR_H.bind(this),
             0xB6: this.opcodeOR_HL_mem.bind(this),
             0xB7: this.opcodeOR_A.bind(this),
             0xB8: this.opcodeCP_B.bind(this),
             0xB9: this.opcodeCP_C.bind(this),
             0xBA: this.opcodeCP_D.bind(this),
             0xBB: this.opcodeCP_E.bind(this),
+            0xBC: this.opcodeCP_H.bind(this),
+            0xBD: this.opcodeCP_L.bind(this),
+            0xBE: this.opcodeCP_HL.bind(this),
+            0xBF: this.opcodeCP_A.bind(this),
             0xC0: this.opcodeRET_NZ.bind(this),
             0xC1: this.opcodePOP_BC.bind(this),
             0xC2: this.opcodeJP_NZ_nn.bind(this),
@@ -168,6 +219,7 @@ class GameBoyCPU {
             0xC6: this.opcodeADD_A_n.bind(this),
             0xC9: this.opcodeRET.bind(this),
             0xC8: this.opcodeRET_Z.bind(this),
+            0xCA: this.opcodeJP_Z_nn.bind(this),
             0xCB: this.opcodeCB.bind(this),
             0xCC: this.opcodeCALL_Z_nn.bind(this),
             0xCD: this.opcodeCALL_nn.bind(this),
@@ -179,23 +231,27 @@ class GameBoyCPU {
             0xD4: this.opcodeCALL_NC_nn.bind(this),
             0xD6: this.opcodeSUB_n.bind(this),
             0xD8: this.opcodeRET_C.bind(this),
-            0xDB: this.opcodeILLEGAL.bind(this),
             0xD9: this.opcodeRETI.bind(this),
+            0xDB: this.opcodeILLEGAL.bind(this),
+            0xDE: this.opcodeSBC_A_n.bind(this),
             0xDD: this.opcodeILLEGAL.bind(this),
             0xDC: this.opcodeCALL_C_nn.bind(this),
             0xDF: this.opcodeRST_18H.bind(this),
             0xE0: this.opcodeLDH_n_A.bind(this),
             0xE1: this.opcodePOP_HL.bind(this),
+            0xE2: this.opcodeLD_C_mem_A.bind(this),
             0xE3: this.opcodeILLEGAL.bind(this),
             0xE4: this.opcodeILLEGAL.bind(this),
             0xE5: this.opcodePUSH_HL.bind(this),
             0xE6: this.opcodeAND_n.bind(this),
+            0xE8: this.opcodeADD_SP_n.bind(this),
             0xE9: this.opcodeJP_HL.bind(this),
             0xEA: this.opcodeLD_nn_A.bind(this),
             0xEB: this.opcodeILLEGAL.bind(this),
             0xEC: this.opcodeILLEGAL.bind(this),
             0xED: this.opcodeILLEGAL.bind(this),
             0xEE: this.opcodeXOR_n.bind(this),
+            0xEF: this.opcodeRST_28H.bind(this),
             0xF0: this.opcodeLDAFromImmediateIO.bind(this),
             0xF1: this.opcodePOP_AF.bind(this),
             0xF3: this.opcodeDI.bind(this),
@@ -268,6 +324,31 @@ class GameBoyCPU {
         this.memory[0xFFFF] = 0x00; // IE
 
         this.interruptsEnabled = this.stopEnabled = this.haltEnabled = false;
+    }
+
+    writeMemory(address, value) {
+        this.memory[address] = value;
+
+         // Mirror Work RAM <-> Echo RAM
+        if (address >= 0xC000 && address <= 0xDDFF) {
+            // Write to Echo RAM
+            this.memory[address + 0x2000] = value;
+        }
+        else if (address >= 0xE000 && address <= 0xFDFF) {
+            // Write to Work RAM
+            this.memory[address - 0x2000] = value;
+        }
+
+        // check for serial output
+        if (address === 0xFF02 && value === 0x81) {
+            // Print the character in 0xFF01
+            const char = String.fromCharCode(this.memory[0xFF01]);
+            this.serialBuffer += char;
+            if (char === '\n' || this.serialBuffer.endsWith("ok")) {
+                console.log("SERIAL:", this.serialBuffer.trim());
+                this.serialBuffer = "";
+            }
+        }
     }
 
     loadBIOS(biosData) {
@@ -385,387 +466,58 @@ class GameBoyCPU {
     }
 
     runStep() {
-        this.registers.lastPC = this.registers.PC;
-
-        if (!this.BIOSExecuted && this.BIOSLoaded && this.registers.PC >= 0x0100) {
-            // BIOS finished execution
-            this.unmapBIOS(); // switch to cartridge ROM
-
-            this.BIOSExecuted = true;
+        // The EI instruction enables interrupts AFTER the instruction following it has been executed.
+        // We check this flag at the beginning of the loop to achieve that delay.
+        if (this.imeScheduled) {
+            this.enableInterrupts();
+            this.imeScheduled = false;
         }
 
-        const opcode = this.memory[this.registers.PC]; // Fetch opcode
+        const interruptCycles = this.handleInterrupts();
+        if (interruptCycles > 0) {
+            return interruptCycles;
+        }
+
+        if (this.haltEnabled) {
+            return 4; // CPU is halted, burn 4 cycles and check for interrupts again next time.
+        }
+
+        // if (!this.BIOSExecuted && this.BIOSLoaded && this.registers.PC >= 0x0100) {
+        //     // BIOS finished execution
+        //     this.unmapBIOS(); // switch to cartridge ROM
+
+        //     this.BIOSExecuted = true;
+        // }
+
+        const pcBefore = this.registers.PC;
+        const opcode = this.memory[pcBefore];
         const handler = this.opcodeHandlers[opcode];
 
         let elapsedClockTicks = 4; // Default cycles
         if (handler) {
             this.lastOpcodeHandlerName = handler.name.split(" ")[1].split("opcode")[1];
-            // handlers returns their cycle count
-            const cycles = handler();
-            elapsedClockTicks = (cycles !== undefined) ? cycles : 4;
+
+            elapsedClockTicks = handler() || 4;
+
+            if (this.haltBug) {
+                // The HALT bug causes the PC to not be incremented after the instruction following HALT.
+                // We emulate this by setting the PC back to what it was before the instruction ran.
+                this.registers.PC = pcBefore;
+                this.haltBug = false;
+            }
         }
         else {
             this.lastOpcodeHandlerName = "UNKNOWN";
             console.warn(`Unimplemented opcode: 0x${opcode.toString(16)} at address 0x${this.registers.PC.toString(16)}`);
             this.registers.PC++; // Skip the unhandled opcode
         }
+
         return elapsedClockTicks;
     }
 
     getGameNameFromMemory() {
         return String.fromCharCode(...this.memory.slice(cartridgeNameAdress[0], cartridgeNameAdress[1]));
     }
-
-    /*
-    executeOpcode(opcode) {
-        switch (opcode) {
-            case 0x00: // NOP - No operation
-                // Does nothing, just moves to the next instruction
-                this.registers.PC++;
-                break;
-
-            case 0x01: // LD BC, nn - Load 16-bit immediate value into BC register pair
-                this.registers.C = this.memory[this.registers.PC + 1];
-                this.registers.B = this.memory[this.registers.PC + 2];
-                this.registers.PC += 3; // Opcode consumes 3 bytes
-                break;
-
-            case 0x02: // LD (BC), A - Store A into memory address BC
-                const bc = (this.registers.B << 8) | this.registers.C;
-                this.memory[bc] = this.registers.A;
-                this.registers.PC++;
-                break;
-
-            case 0x03: // INC BC - Increment BC register pair
-                this.registers.C++;
-                if (this.registers.C === 0) {
-                    this.registers.B++;
-                }
-                this.registers.PC++;
-                break;
-
-            case 0x04: // INC B - Increment B register
-                this.registers.B++;
-                this.setZeroFlag(this.registers.B);
-                this.registers.PC++;
-                break;
-
-            case 0x05: // DEC B - Decrement B register
-                this.registers.B--;
-                this.setZeroFlag(this.registers.B);
-                this.registers.PC++;
-                break;
-
-            case 0x06: // LD B, n - Load immediate value into B
-                this.registers.B = this.memory[this.registers.PC + 1];
-                this.registers.PC += 2; // Opcode consumes 2 bytes
-                break;
-
-            case 0x08: { // LD (nn), SP
-                // Fetch the 16-bit address from the next two bytes in memory (little-endian)
-                const lowByte = this.memory[this.registers.PC + 1];
-                const highByte = this.memory[this.registers.PC + 2];
-                const address = (highByte << 8) | lowByte;
-            
-                // Store the lower and upper bytes of SP into memory at the specified address
-                this.memory[address] = this.registers.SP & 0xFF;         // Low byte of SP
-                this.memory[address + 1] = (this.registers.SP >> 8) & 0xFF; // High byte of SP
-            
-                // Increment the Program Counter
-                this.registers.PC += 3; // Instruction size is 3 bytes
-            }    break;
-
-            case 0x0C: // INC C
-                this.registers.C = (this.registers.C + 1) & 0xFF; // Increment C and ensure it stays within 8 bits
-            
-                // Update the flags
-                this.setZeroFlag(this.registers.C); // Set Z flag if result is 0
-                this.clearSubtractFlag();           // Clear N flag since this is not a subtraction
-                this.setHalfCarryFlag(this.registers.C - 1, 1); // Check for half-carry during addition
-            
-                // Increment the Program Counter
-                this.registers.PC++; // 1-byte instruction
-                break;
-
-            case 0x0D: // DEC C
-                this.registers.C = (this.registers.C - 1) & 0xFF; // Decrement C and ensure it stays within 8 bits
-            
-                // Update the flags
-                this.setZeroFlag(this.registers.C); // Set Z flag if result is 0
-                this.setSubtractFlag();            // Set N flag since this is a subtraction
-                this.setHalfCarryFlag(this.registers.C + 1, 1); // Check for half-carry during subtraction
-            
-                // Increment the Program Counter
-                this.registers.PC++; // 1-byte instruction
-                break;
-
-            case 0x0E: // LD C, n
-                this.registers.C = this.memory[this.registers.PC + 1]; // Fetch the immediate value
-
-                this.registers.PC += 2; // Increment PC by 2 (opcode + immediate value)
-                break;
-
-            case 0x10: // STOP - Halt the CPU
-                console.log("STOP instruction executed");
-                this.registers.PC++;
-                break;
-
-            case 0x30: // JR NZ, nn - Jump to address (PC + signed nn) if Zero flag is not set
-                const offset = this.memory[this.registers.PC + 1]; // Fetch the signed offset (byte at PC + 1)
-                
-                // Check if the Zero flag is not set (NZ condition)
-                if ((this.registers.F & 0x80) === 0) {
-                    // If Zero flag is not set, perform the jump
-                    this.registers.PC += offset; // Jump to the new address (PC + signed offset)
-                }
-                else {
-                    // If Zero flag is set, do nothing (just increment PC normally)
-                    this.registers.PC++; // Move to the next instruction
-                }
-                break;
-
-            case 0x31: { // LD SP, nn - Load 16-bit immediate value into SP
-                // Fetch the 16-bit immediate value from memory
-                const lowByte = this.memory[this.registers.PC + 1]; // Fetch low byte
-                const highByte = this.memory[this.registers.PC + 2]; // Fetch high byte
-                
-                // Combine the low and high bytes into a 16-bit value (nn)
-                this.registers.SP = (highByte << 8) | lowByte;
-            
-                // Increment the program counter to point to the next instruction
-                this.registers.PC += 2;
-                }
-                break;
-
-            case 0x3C: // INC A
-                this.registers.A = (this.registers.A + 1) & 0xFF; // Increment A and keep it within 8 bits
-            
-                // Update flags
-                this.setZeroFlag(this.registers.A); // Set Z flag if result is zero
-                this.registers.F &= ~0x40;         // Clear N flag (bit 6)
-                if ((this.registers.A & 0x0F) === 0) {
-                    this.registers.F |= 0x20;      // Set H flag (bit 5) if carry from bit 3
-                }
-                else {
-                    this.registers.F &= ~0x20;     // Clear H flag (bit 5)
-                }
-
-                this.registers.PC++; // Increment the Program Counter
-                break;
-
-            case 0x6E: { // LD L, (HL)
-                const hlAddress = (this.registers.H << 8) | this.registers.L; // Combine H and L registers into a 16-bit address
-                this.registers.L = this.memory[hlAddress]; // Load the value from memory at address HL into register L
-
-                this.registers.PC++; // Increment the Program Counter
-            }    break;
-
-            case 0x73: // LD (HL), E
-                const hlAddress = (this.registers.H << 8) | this.registers.L; // Combine H and L to form the 16-bit address
-                this.memory[hlAddress] = this.registers.E; // Store the value of register E into memory at HL
-
-                this.registers.PC++; // Increment the Program Counter
-                break;
-            
-            case 0x76: // HALT - Freeze the CPU until reset
-                console.log("HALT instruction executed");
-                this.registers.PC++;
-                break;
-            
-            case 0x7F: // LD A, A
-                // No operation, just move to the next instruction
-                this.registers.PC++; // 1-byte instruction
-                break;
-
-            case 0x80: // ADD A, B - Add B to A
-                this.add(this.registers.B);
-                this.registers.PC++; // 1-byte instruction
-                break;
-
-            case 0x81: // ADD A, C - Add C to A
-                this.add(this.registers.C);
-                this.registers.PC++; // 1-byte instruction
-                break;
-
-            case 0x83: { // ADD A, E
-                const value = this.registers.E; // Get the value of register E
-                const result = this.registers.A + value; // Perform the addition
-            
-                // Update the A register with the lower 8 bits of the result
-                this.registers.A = result & 0xFF;
-            
-                // Use the updateFlags method to handle Z, H, and C flags
-                this.updateFlags(result);
-            
-                // Increment the Program Counter
-                this.registers.PC++; // 1-byte instruction
-                }
-                break;
-
-            case 0x88: { // ADC A, B
-                const carry = (this.registers.F & 0x10) ? 1 : 0; // Extract the carry flag (C)
-                const value = this.registers.B; // Value to add from register B
-                const result = this.registers.A + value + carry; // Add A, B, and carry
-            
-                this.registers.A = result & 0xFF; // Store the lower 8 bits back in A
-            
-                // Update flags
-                this.setZeroFlag(this.registers.A); // Set Z flag if the result is zero
-                this.setSubtractFlag(false); // Clear N flag (this is an addition)
-                this.setHalfCarryFlag((this.registers.A - value - carry) & 0xF, (value + carry) & 0xF); // Set H flag
-                this.setCarryFlag(result); // Set C flag if there's a carry out of bit 7
-            
-                this.registers.PC++; // Increment the Program Counter
-            }   break;
-
-            case 0x89: { // ADC A, C
-                const carry = (this.registers.F & 0x10) ? 1 : 0; // Extract the carry flag (C)
-                const value = this.registers.C; // Value to add from register C
-                const result = this.registers.A + value + carry; // Add A, C, and carry
-
-                this.registers.A = result & 0xFF; // Store the lower 8 bits back in A
-
-                // Update flags
-                this.setZeroFlag(this.registers.A); // Set Z flag if the result is zero
-                this.setSubtractFlag(false); // Clear N flag (this is an addition)
-                this.setHalfCarryFlag((this.registers.A - value - carry) & 0xF, (value + carry) & 0xF); // Set H flag
-                this.setCarryFlag(result); // Set C flag if there's a carry out of bit 7
-
-                this.registers.PC++; // Increment the Program Counter
-            }    break;
-            
-            case 0xC3: // JP nn - Jump to address nn (16-bit immediate)
-                const lowByte = this.memory[this.registers.PC + 1];  // Fetch lower byte (byte at PC+1)
-                const highByte = this.memory[this.registers.PC + 2]; // Fetch higher byte (byte at PC+2)
-                
-                // Combine the two bytes into a 16-bit address (little-endian format)
-                const address = (highByte << 8) | lowByte;
-                
-                this.registers.PC = address; // Set PC to the new address
-                break;
-
-            case 0xC9: { // RET - Return from subroutine
-                // Pop the 16-bit return address from the stack
-                const lowByte = this.memory[this.registers.SP];       // Fetch the lower byte from the stack
-                const highByte = this.memory[this.registers.SP + 1];  // Fetch the higher byte from the stack
-                
-                // Combine the two bytes into a 16-bit address (little-endian format)
-                const returnAddress = (highByte << 8) | lowByte;
-                
-                // Set the program counter (PC) to the return address
-                this.registers.PC = returnAddress;
-                
-                // Increment the stack pointer (SP) by 2 to pop the return address
-                this.registers.SP += 2;
-            }   break;
-
-            case 0xCC: // CALL Z, nn
-                if (this.registers.F & 0x80) { // Check if the Zero flag (Z) is set
-                    const lowByte = this.memory[this.registers.PC + 1];  // Fetch the lower byte of the address
-                    const highByte = this.memory[this.registers.PC + 2]; // Fetch the higher byte of the address
-                    const address = (highByte << 8) | lowByte;           // Combine bytes to form 16-bit address
-
-                    // Push the current PC + 3 (next instruction) onto the stack
-                    this.registers.SP -= 2; // Decrement SP by 2 to reserve space
-                    this.memory[this.registers.SP] = (this.registers.PC + 3) & 0xFF;         // Store lower byte of PC
-                    this.memory[this.registers.SP + 1] = ((this.registers.PC + 3) >> 8);    // Store higher byte of PC
-
-                    this.registers.PC = address; // Jump to the subroutine
-                }
-                else {
-                    this.registers.PC += 3; // Skip the immediate value if condition is not met
-                }
-                break;
-
-            case 0xD6: // SUB n - Subtract immediate value n from A
-                const n = this.memory[this.registers.PC + 1]; // Fetch the immediate value n (byte at PC + 1)
-                
-                // Perform the subtraction
-                const result = this.registers.A - n;
-            
-                // Update the A register with the result (only lower 8 bits)
-                this.registers.A = result & 0xFF;
-                
-                // Update the flags
-                this.setSubtractFlag(); // Set N flag
-                this.setZeroFlag(this.registers.A); // Set Z flag based on the result
-                this.setHalfCarryFlag(this.registers.A, n); // Set H flag for half carry
-                this.setCarryFlag(result); // Set C flag for carry/borrow
-                
-                this.registers.PC++; // Move to the next instruction
-                break;
-
-            case 0xD9: { // RETI - Return and enable interrupts
-                // Pop the 16-bit return address from the stack
-                const lowByte = this.memory[this.registers.SP];
-                const highByte = this.memory[this.registers.SP + 1];
-                const returnAddress = (highByte << 8) | lowByte;
-            
-                // Update the program counter
-                this.registers.PC = returnAddress;
-            
-                // Increment the stack pointer by 2 (popping the address)
-                this.registers.SP += 2;
-            
-                // Enable interrupts
-                this.interruptsEnabled = true;
-            
-                console.log("RETI executed, returning to 0x" + returnAddress.toString(16));
-            }   break;
-
-            case 0xDC: // CALL C, nn
-                if (this.registers.F & 0x10) { // Check if the Carry flag (C) is set
-                    const lowByte = this.memory[this.registers.PC + 1];  // Fetch the lower byte of the address
-                    const highByte = this.memory[this.registers.PC + 2]; // Fetch the higher byte of the address
-                    const address = (highByte << 8) | lowByte;           // Combine bytes to form 16-bit address
-            
-                    // Push the current PC + 3 (next instruction) onto the stack
-                    this.registers.SP -= 2; // Decrement SP by 2 to reserve space
-                    this.memory[this.registers.SP] = (this.registers.PC + 3) & 0xFF;         // Store lower byte of PC
-                    this.memory[this.registers.SP + 1] = ((this.registers.PC + 3) >> 8);    // Store higher byte of PC
-            
-                    this.registers.PC = address; // Jump to the subroutine
-                }
-                else {
-                    this.registers.PC += 3; // Skip the immediate value if condition is not met
-                }
-                break;
-
-            case 0xDF: // RST 18H
-                // restart instruction
-                // Push the current PC onto the stack
-                this.memory[--this.registers.SP] = (this.registers.PC >> 8) & 0xFF; // High byte
-                this.memory[--this.registers.SP] = this.registers.PC & 0xFF;        // Low byte
-            
-                // Set the PC to 0x0018
-                this.registers.PC = 0x0018;
-                break;
-
-            case 0xE6: // AND n
-                const immediateValue = this.memory[this.registers.PC + 1]; // Fetch the immediate 8-bit value
-                this.registers.A &= immediateValue; // Perform bitwise AND and store result in A
-            
-                // Update flags
-                this.registers.F = 0; // Clear all flags
-                this.setZeroFlag(this.registers.A); // Set Z flag if result is zero
-                this.registers.F |= 0x20; // Set H flag (bit 5), always set for AND
-            
-                this.registers.PC += 2; // Advance PC by 2 (1 for opcode + 1 for immediate value)
-                break;
-
-            case 0xF3: // DI - Disable interrupts
-                this.disableInterrupts(); // Disable interrupt handling
-                this.registers.PC++; // Move to the next instruction
-                break;
-
-            // Add more opcodes as needed...
-            default:
-                console.log(`Unimplemented opcode: ${opcode.toString(16)}`);
-                this.registers.PC++; // Move to the next instruction
-                break;
-        }
-    }
-    */
 
     // Helper function to add a value to the A register and update flags
     add(value) {
@@ -821,18 +573,10 @@ class GameBoyCPU {
         const result = originalA + value + carry;
         this.registers.A = result & 0xFF;
 
-        // Update flags
-        this.registers.F = 0; // Clear N, H, C flags. Z is set based on result.
-        if (this.registers.A === 0) {
-            this.registers.F |= 0x80; // Set Z flag
-        }
-        // N flag is cleared for additions
-        if ((originalA & 0xF) + (value & 0xF) + carry > 0xF) {
-            this.registers.F |= 0x20; // Set H flag
-        }
-        if (result > 0xFF) {
-            this.registers.F |= 0x10; // Set C flag
-        }
+        this.setZeroFlag(this.registers.A);
+        this.clearSubtractFlag();
+        this.setHalfCarryFlagForAdd(originalA, value, carry);
+        this.setCarryFlag(result > 0xFF);
     }
 
     // Helper function to subtract a value from the A register and update flags
@@ -844,27 +588,58 @@ class GameBoyCPU {
         this.setZeroFlag(this.registers.A);
         this.setSubtractFlag();
         this.setHalfCarryFlag(originalA, value);
-        this.setCarryFlag(result);
+        this.setCarryFlag(result < 0);
+    }
+
+    // Helper function to subtract with carry a value from the A register and update flags
+    sbc(value) {
+        const originalA = this.registers.A;
+        const carry = (this.registers.F & 0x10) ? 1 : 0;
+        const result = originalA - value - carry;
+        this.registers.A = result & 0xFF;
+
+        this.setZeroFlag(this.registers.A);
+        this.setSubtractFlag();
+
+        // Half Carry: check for borrow from bit 4
+        if ((originalA & 0xF) < ((value & 0xF) + carry)) {
+            this.registers.F |= 0x20; // Set H
+        }
+        else {
+            this.registers.F &= ~0x20; // Clear H
+        }
+
+        this.setCarryFlag(result < 0);
+    }
+
+    // Helper function to AND a value with the A register and update flags
+    and(value) {
+        this.registers.A &= value;
+
+        this.setZeroFlag(this.registers.A);
+        this.clearSubtractFlag();
+        this.registers.F |= 0x20; // Set H flag
+        this.setCarryFlag(false); // Clear C flag
     }
 
     // Helper function to OR a value with the A register and update flags
     or(value) {
         this.registers.A |= value;
 
-        this.registers.F = 0x00; // Clear N, H, C flags
-        if (this.registers.A === 0) {
-            this.registers.F |= 0x80; // Set Z flag if result is 0
-        }
+        this.setZeroFlag(this.registers.A);
+        this.clearSubtractFlag();
+        this.registers.F &= ~0x20; // Clear H flag
+        this.setCarryFlag(false); // Clear C flag
     }
 
     // Helper function to XOR a value with the A register and update flags
     xor(value) {
         this.registers.A ^= value;
 
-        this.registers.F = 0x00; // Clear N, H, C flags
-        if (this.registers.A === 0) {
-            this.registers.F |= 0x80; // Set Z flag if result is 0
-        }
+        this.setZeroFlag(this.registers.A);
+        this.clearSubtractFlag();
+        this.registers.F &= ~0x20; // Clear H flag
+        this.setCarryFlag(false); // Clear C flag
     }
 
     // Helper function to compare a value with the A register and update flags
@@ -875,7 +650,7 @@ class GameBoyCPU {
         this.setZeroFlag(result & 0xFF);
         this.setSubtractFlag();
         this.setHalfCarryFlag(originalA, value);
-        this.setCarryFlag(result);
+        this.setCarryFlag(result < 0);
     }
 
     // Helper function to set the Zero flag based on register value
@@ -908,14 +683,88 @@ class GameBoyCPU {
         }
     }
 
+    setHalfCarryFlagForAdd(a, b, c = 0) {
+        if (((a & 0xF) + (b & 0xF) + c) > 0xF) {
+            this.registers.F |= 0x20; // Set H flag
+        }
+        else {
+            this.registers.F &= ~0x20; // Clear H flag
+        }
+    }
+
     // Set the Carry flag (C) based on the subtraction result
-    setCarryFlag(result) {
-        if (result < 0) {
+    setCarryFlag(isSet) {
+        if (isSet) {
             this.registers.F |= 0x10; // Set C flag (bit 4)
         }
         else {
             this.registers.F &= ~0x10; // Clear C flag (bit 4)
         }
+    }
+
+    setHalfCarryFlagForAdd(a, b, c = 0) {
+        if (((a & 0xF) + (b & 0xF) + c) > 0xF) {
+            this.registers.F |= 0x20; // Set H flag
+        }
+        else {
+            this.registers.F &= ~0x20; // Clear H flag
+        }
+    }
+
+    handleInterrupts() {
+        if (!this.interruptsEnabled) {
+            // HALT can be exited even if IME is false
+            if (this.haltEnabled) {
+                const fired = this.memory[0xFF0F] & this.memory[0xFFFF] & 0x1F;
+                if (fired !== 0) {
+                    this.haltEnabled = false;
+                }
+            }
+            return 0;
+        }
+
+        const IF = this.memory[0xFF0F]; // Interrupt Flag register
+        const IE = this.memory[0xFFFF]; // Interrupt Enable register
+
+        const fired = IF & IE & 0x1F; // Only check the 5 interrupt bits
+
+        if (fired === 0) {
+            return 0;
+        }
+
+        // An interrupt occurred, wake from HALT
+        this.haltEnabled = false;
+        this.interruptsEnabled = false; // Disable master interrupt flag
+
+        // An interrupt handling sequence takes 5 machine cycles (20 clock cycles).
+        
+        // V-Blank Interrupt (Priority 0)
+        if (fired & 0x01) {
+            this.memory[0xFF0F] &= ~0x01; // Clear V-Blank interrupt flag
+            this.push(this.registers.PC >> 8, this.registers.PC & 0xFF);
+            this.registers.PC = 0x0040;
+            return 20;
+        }
+
+        // LCD STAT Interrupt (Priority 1)
+        if (fired & 0x02) {
+            this.memory[0xFF0F] &= ~0x02; // Clear LCD STAT interrupt flag
+            this.push(this.registers.PC >> 8, this.registers.PC & 0xFF);
+            this.registers.PC = 0x0048;
+            return 20;
+        }
+
+        // Timer Interrupt (Priority 2)
+        if (fired & 0x04) {
+            this.memory[0xFF0F] &= ~0x04; // Clear Timer interrupt flag
+            this.push(this.registers.PC >> 8, this.registers.PC & 0xFF);
+            this.registers.PC = 0x0050;
+            return 20;
+        }
+
+        // We don't handle Serial or Joypad yet, but if they fired, we'd handle them here.
+
+        return 0;
     }
 
     enableInterrupts() {
@@ -929,9 +778,9 @@ class GameBoyCPU {
     // Helper for PUSH opcodes
     push(highByte, lowByte) {
         this.registers.SP--;
-        this.memory[this.registers.SP] = highByte;
+        this.writeMemory(this.registers.SP, highByte);
         this.registers.SP--;
-        this.memory[this.registers.SP] = lowByte;
+        this.writeMemory(this.registers.SP, lowByte);
     }
 
     // Helper for POP opcodes
@@ -965,7 +814,7 @@ class GameBoyCPU {
             case 3: this.registers.E = value; break;
             case 4: this.registers.H = value; break;
             case 5: this.registers.L = value; break;
-            case 6: this.memory[this.registers.HL] = value; break; // (HL)
+            case 6: this.writeMemory(this.registers.HL, value); break; // (HL)
             case 7: this.registers.A = value; break;
         }
     }
@@ -991,7 +840,7 @@ class GameBoyCPU {
 
     opcodeLD_BC_A() { // 0x02: LD (BC), A - Store A into memory address BC
         const bc = (this.registers.B << 8) | this.registers.C;
-        this.memory[bc] = this.registers.A;
+        this.writeMemory(bc, this.registers.A);
         
         this.registers.PC++;
         return 8;
@@ -1005,18 +854,14 @@ class GameBoyCPU {
     }
 
     opcodeINC_B() { // 0x04: INC B
-        this.registers.B = (this.registers.B + 1) & 0xFF;
+        const originalValue = this.registers.B;
+        this.registers.B = (originalValue + 1) & 0xFF;
 
         // Update flags (Z, N, H)
         this.setZeroFlag(this.registers.B);
         this.clearSubtractFlag(); // N is cleared
         // Set H if carry from bit 3
-        if ((this.registers.B & 0x0F) === 0x00) {
-            this.registers.F |= 0x20; // Set H flag
-        }
-        else {
-            this.registers.F &= ~0x20; // Clear H flag
-        }
+        this.setHalfCarryFlagForAdd(originalValue, 1);
 
         this.registers.PC++;
         return 4;
@@ -1028,9 +873,8 @@ class GameBoyCPU {
         this.registers.B = (this.registers.B - 1) & 0xFF;
 
         // Update the flags
-        this.setZeroFlag(this.registers.B); // Set Z flag if result is 0
-        this.setSubtractFlag();            // Set N flag since this is a subtraction
-        this.setHalfCarryFlag(originalB, 1); // Check for half-carry during subtraction
+        this.setZeroFlag(this.registers.B);
+        this.setSubtractFlag();
 
         this.registers.PC++;
         return 4;
@@ -1065,8 +909,8 @@ class GameBoyCPU {
         const address = (highByte << 8) | lowByte;
     
         // Store the lower and upper bytes of SP into memory at the specified address
-        this.memory[address] = this.registers.SP & 0xFF;            // Low byte of SP
-        this.memory[address + 1] = (this.registers.SP >> 8) & 0xFF; // High byte of SP
+        this.writeMemory(address, this.registers.SP & 0xFF);         // Low byte of SP
+        this.writeMemory(address + 1, (this.registers.SP >> 8) & 0xFF); // High byte of SP
     
         this.registers.PC += 3; // Instruction size is 3 bytes
         return 20;
@@ -1094,18 +938,13 @@ class GameBoyCPU {
     }
 
     opcodeINC_C() { // 0x0C: INC C
-        this.registers.C = (this.registers.C + 1) & 0xFF; // Increment C and ensure it stays within 8 bits
+        const originalValue = this.registers.C;
+        this.registers.C = (originalValue + 1) & 0xFF;
     
         // Update flags (Z, N, H)
         this.setZeroFlag(this.registers.C);
         this.clearSubtractFlag(); // N is cleared
-        // Set H if carry from bit 3
-        if ((this.registers.C & 0x0F) === 0x00) {
-            this.registers.F |= 0x20; // Set H flag
-        }
-        else {
-            this.registers.F &= ~0x20; // Clear H flag
-        }
+        this.setHalfCarryFlagForAdd(originalValue, 1);
     
         this.registers.PC++;
         return 4;
@@ -1149,26 +988,20 @@ class GameBoyCPU {
 
     opcodeLD_DE_A() { // 0x12: LD (DE), A
         // Store A into memory address DE.
-        this.memory[this.registers.DE] = this.registers.A;
+        this.writeMemory(this.registers.DE, this.registers.A);
+        
         this.registers.PC++;
         return 8;
     }
 
     opcodeINC_D() { // 0x14: INC D
-        // Increments register D.
-        this.registers.D = (this.registers.D + 1) & 0xFF;
+        const originalValue = this.registers.D;
+        this.registers.D = (originalValue + 1) & 0xFF;
 
         // Update flags (Z, N, H)
         this.setZeroFlag(this.registers.D);
         this.clearSubtractFlag(); // N is cleared
-        // Set H if carry from bit 3
-        if ((this.registers.D & 0x0F) === 0x00) {
-            this.registers.F |= 0x20; // Set H flag
-        }
-        else {
-            this.registers.F &= ~0x20; // Clear H flag
-        }
-        // C flag is not affected
+        this.setHalfCarryFlagForAdd(originalValue, 1);
 
         this.registers.PC++;
         return 4;
@@ -1179,6 +1012,7 @@ class GameBoyCPU {
         const originalD = this.registers.D;
         this.registers.D = (originalD - 1) & 0xFF;
 
+        // Update flags (Z, N, H)
         this.setZeroFlag(this.registers.D);
         this.setSubtractFlag();
         this.setHalfCarryFlag(originalD, 1); // Check for borrow from bit 4
@@ -1192,6 +1026,13 @@ class GameBoyCPU {
         // Loads an immediate 8-bit value into register D.
         this.registers.D = this.memory[this.registers.PC + 1];
         this.registers.PC += 2;
+        return 8;
+    }
+
+    opcodeADD_HL_DE() { // 0x19: ADD HL, DE
+        // Adds the 16-bit value of DE to HL.
+        this.add16(this.registers.DE);
+        this.registers.PC++;
         return 8;
     }
 
@@ -1209,6 +1050,13 @@ class GameBoyCPU {
         }
         this.registers.PC++;
         return 4;
+    }
+
+    opcodeDEC_DE() { // 0x1B: DEC DE
+        // Decrement DE register pair. No flags affected.
+        this.registers.DE--;
+        this.registers.PC++;
+        return 8;
     }
 
     opcodeRRA() { // 0x1F: RRA
@@ -1229,20 +1077,13 @@ class GameBoyCPU {
     }
 
     opcodeINC_E() { // 0x1C: INC E
-        // Increments register E.
-        this.registers.E = (this.registers.E + 1) & 0xFF;
+        const originalValue = this.registers.E;
+        this.registers.E = (originalValue + 1) & 0xFF;
 
         // Update flags (Z, N, H)
         this.setZeroFlag(this.registers.E);
         this.clearSubtractFlag(); // N is cleared
-        // Set H if carry from bit 3
-        if ((this.registers.E & 0x0F) === 0x00) {
-            this.registers.F |= 0x20; // Set H flag
-        }
-        else {
-            this.registers.F &= ~0x20; // Clear H flag
-        }
-        // C flag is not affected
+        this.setHalfCarryFlagForAdd(originalValue, 1);
 
         this.registers.PC++;
         return 4;
@@ -1268,9 +1109,9 @@ class GameBoyCPU {
         const originalE = this.registers.E;
         this.registers.E = (originalE - 1) & 0xFF;
 
+        // Update flags (Z, N, H)
         this.setZeroFlag(this.registers.E);
         this.setSubtractFlag();
-        this.setHalfCarryFlag(originalE, 1); // A = originalE, n = 1
 
         this.registers.PC++;
         return 4;
@@ -1308,6 +1149,13 @@ class GameBoyCPU {
         return 8;
     }
 
+    opcodeDEC_HL() { // 0x2B: DEC HL
+        // Decrement HL register pair. No flags affected.
+        this.registers.HL--;
+        this.registers.PC++;
+        return 8;
+    }
+
     opcodeJR_NZ_n() { // 0x20: JR NZ, n
         // Jump to the address PC + n if the Zero flag is not set.
         const n = this.memory[this.registers.PC + 1]; // Fetch the signed offset n
@@ -1334,7 +1182,7 @@ class GameBoyCPU {
     opcodeLD_HLplus_A() { // 0x22: LD (HL+), A
         // Stores the value of A into the memory address pointed to by HL,
         // then increment the value of HL
-        this.memory[this.registers.HL] = this.registers.A;
+        this.writeMemory(this.registers.HL, this.registers.A);
         this.registers.HL++;
 
         this.registers.PC += 1;
@@ -1350,20 +1198,13 @@ class GameBoyCPU {
     }
 
     opcodeINC_H() { // 0x24: INC H
-        // Increments the H register by one, updating the necessary flags
-        this.registers.H = (this.registers.H + 1) & 0xFF;
+        const originalValue = this.registers.H;
+        this.registers.H = (originalValue + 1) & 0xFF;
 
         // Update flags (Z, N, H)
         this.setZeroFlag(this.registers.H);
         this.clearSubtractFlag(); // N is cleared
-        // Set H if carry from bit 3
-        if ((this.registers.H & 0x0F) === 0x00) {
-            this.registers.F |= 0x20; // Set H flag
-        }
-        else {
-            this.registers.F &= ~0x20; // Clear H flag
-        }
-        // C flag is not affected
+        this.setHalfCarryFlagForAdd(originalValue, 1);
 
         this.registers.PC++;
         return 4;
@@ -1374,10 +1215,9 @@ class GameBoyCPU {
         const originalH = this.registers.H;
         this.registers.H = (originalH - 1) & 0xFF;
 
+        // Update flags (Z, N, H)
         this.setZeroFlag(this.registers.H);
         this.setSubtractFlag();
-        this.setHalfCarryFlag(originalH, 1); // Check for borrow from bit 4
-        // C flag is not affected
 
         this.registers.PC++;
         return 4;
@@ -1393,19 +1233,13 @@ class GameBoyCPU {
     }
 
     opcodeINC_L() { // 0x2C: INC L
-        this.registers.L = (this.registers.L + 1) & 0xFF;
+        const originalValue = this.registers.L;
+        this.registers.L = (originalValue + 1) & 0xFF;
 
         // Update flags (Z, N, H)
         this.setZeroFlag(this.registers.L);
         this.clearSubtractFlag(); // N is cleared
-        // Set H if carry from bit 3
-        if ((this.registers.L & 0x0F) === 0x00) {
-            this.registers.F |= 0x20; // Set H flag
-        }
-        else {
-            this.registers.F &= ~0x20; // Clear H flag
-        }
-        // C flag is not affected
+        this.setHalfCarryFlagForAdd(originalValue, 1);
 
         this.registers.PC++;
         return 4;
@@ -1416,6 +1250,7 @@ class GameBoyCPU {
         const originalL = this.registers.L;
         this.registers.L = (originalL - 1) & 0xFF;
 
+        // Update flags (Z, N, H)
         this.setZeroFlag(this.registers.L);
         this.setSubtractFlag();
         this.setHalfCarryFlag(originalL, 1);
@@ -1429,6 +1264,15 @@ class GameBoyCPU {
         this.registers.L = this.memory[this.registers.PC + 1];
         this.registers.PC += 2;
         return 8;
+    }
+
+    opcodeCPL() { // 0x2F: CPL
+        // Complement A (bitwise NOT).
+        this.registers.A = ~this.registers.A;
+        // Set N and H flags.
+        this.registers.F |= 0x60; // Set N and H flags
+        this.registers.PC++;
+        return 4;
     }
 
     opcodeADD_HL_HL() { // 0x29: ADD HL, HL
@@ -1462,7 +1306,7 @@ class GameBoyCPU {
             a -= correction;
         }
 
-        this.registers.A = a;
+        this.registers.A = a & 0xFF;
 
         // Update flags
         this.setZeroFlag(this.registers.A);
@@ -1542,7 +1386,7 @@ class GameBoyCPU {
     opcodeLD_HLm_A() { // 0x32: LD (HL-), A
         // stores the contents of register A into the memory location pointed to by the HL register pair,
         // then decrements the value of HL
-        this.memory[this.registers.HL] = this.registers.A;
+        this.writeMemory(this.registers.HL, this.registers.A);
         this.registers.HL--;
 
         this.registers.PC++;
@@ -1556,6 +1400,37 @@ class GameBoyCPU {
         return 8;
     }
 
+    opcodeLD_HL_n() { // 0x36: LD (HL), n
+        // Load immediate 8-bit value n into memory at address HL.
+        const n = this.memory[this.registers.PC + 1];
+        this.writeMemory(this.registers.HL, n);
+        this.registers.PC += 2;
+        return 12;
+    }
+
+    opcodeSCF() { // 0x37: SCF (Set Carry Flag)
+        // Set Carry flag. Clear N and H flags.
+        this.registers.F |= 0x10;  // Set C
+        this.registers.F &= ~0x60; // Clear N and H
+        this.registers.PC++;
+        return 4;
+    }
+
+    opcodeADD_HL_SP() { // 0x39: ADD HL, SP
+        // Adds the 16-bit value of SP to HL.
+        this.add16(this.registers.SP);
+        this.registers.PC++;
+        return 8;
+    }
+
+    opcodeLD_A_HLminus() { // 0x3A: LD A, (HL-)
+        // Load value from address HL into A, then decrement HL.
+        this.registers.A = this.memory[this.registers.HL];
+        this.registers.HL--;
+        this.registers.PC++;
+        return 8;
+    }
+
     opcodeDEC_SP() { // 0x3B: DEC SP
         // Decrement Stack Pointer. No flags affected.
         this.registers.SP = (this.registers.SP - 1) & 0xFFFF;
@@ -1563,13 +1438,30 @@ class GameBoyCPU {
         return 8;
     }
 
+    opcodeINC_HL_mem() { // 0x34: INC (HL)
+        // Increment the byte at the memory address in HL.
+        const address = this.registers.HL;
+        const originalValue = this.memory[address];
+        const result = (originalValue + 1) & 0xFF;
+        this.writeMemory(address, result);
+
+        // Update flags (Z, N, H)
+        this.setZeroFlag(result);
+        this.clearSubtractFlag();
+        this.setHalfCarryFlagForAdd(originalValue, 1);
+
+        this.registers.PC++;
+        return 12;
+    }
+
     opcodeDEC_HL_mem() { // 0x35: DEC (HL)
         // Decrements the byte at the memory address pointed to by HL.
         const address = this.registers.HL;
         const originalValue = this.memory[address];
         const result = (originalValue - 1) & 0xFF;
-        this.memory[address] = result;
+        this.writeMemory(address, result);
 
+        // Update flags (Z, N, H)
         this.setZeroFlag(result);
         this.setSubtractFlag();
         this.setHalfCarryFlag(originalValue, 1); // Half-carry for decrement is when bit 4 borrows from bit 3
@@ -1580,18 +1472,13 @@ class GameBoyCPU {
     }
 
     opcodeINC_A() { // 0x3C: INC A
-        this.registers.A = (this.registers.A + 1) & 0xFF; // Increment A and keep it within 8 bits
+        const originalValue = this.registers.A;
+        this.registers.A = (originalValue + 1) & 0xFF;
     
-        // Update flags
-        this.setZeroFlag(this.registers.A); // Set Z flag if result is zero
-        this.registers.F &= ~0x40;         // Clear N flag (bit 6)
-        // Set H if carry from bit 3
-        if ((this.registers.A & 0x0F) === 0x00) {
-            this.registers.F |= 0x20;      // Set H flag (bit 5) if carry from bit 3
-        }
-        else {
-            this.registers.F &= ~0x20;     // Clear H flag (bit 5)
-        }
+        // Update flags (Z, N, H)
+        this.setZeroFlag(this.registers.A);
+        this.clearSubtractFlag();
+        this.setHalfCarryFlagForAdd(originalValue, 1);
 
         this.registers.PC++;
         return 4;
@@ -1602,6 +1489,7 @@ class GameBoyCPU {
         const originalA = this.registers.A;
         this.registers.A = (originalA - 1) & 0xFF;
 
+        // Update flags (Z, N, H)
         this.setZeroFlag(this.registers.A);
         this.setSubtractFlag();
         this.setHalfCarryFlag(originalA, 1);
@@ -1620,8 +1508,41 @@ class GameBoyCPU {
         return 8;
     }
 
+    opcodeCCF() { // 0x3F: CCF (Complement Carry Flag)
+        // Invert the Carry flag. Clear N and H flags.
+        this.registers.F ^= 0x10;  // Toggle C
+        this.registers.F &= ~0x60; // Clear N and H
+        this.registers.PC++;
+        return 4;
+    }
+
     opcodeLD_B_B() { // 0x40: LD B, B
         // No operation.
+        this.registers.PC++;
+        return 4;
+    }
+
+    opcodeLD_B_C() { // 0x41: LD B, C
+        this.registers.B = this.registers.C;
+        this.registers.PC++;
+        return 4;
+    }
+
+    opcodeLD_B_D() { // 0x42: LD B, D
+        // Load the value of register D into register B.
+        this.registers.B = this.registers.D;
+        this.registers.PC++;
+        return 4;
+    }
+
+    opcodeLD_B_E() { // 0x43: LD B, E
+        this.registers.B = this.registers.E;
+        this.registers.PC++;
+        return 4;
+    }
+
+    opcodeLD_B_L() { // 0x45: LD B, L
+        this.registers.B = this.registers.L;
         this.registers.PC++;
         return 4;
     }
@@ -1637,6 +1558,42 @@ class GameBoyCPU {
         // Load the value of register H into register B.
         this.registers.B = this.registers.H;
 
+        this.registers.PC++;
+        return 4;
+    }
+
+    opcodeLD_C_B() { // 0x48: LD C, B
+        this.registers.C = this.registers.B;
+        this.registers.PC++;
+        return 4;
+    }
+
+    opcodeLD_C_C() { // 0x49: LD C, C
+        // No operation.
+        this.registers.PC++;
+        return 4;
+    }
+
+    opcodeLD_C_D() { // 0x4A: LD C, D
+        this.registers.C = this.registers.D;
+        this.registers.PC++;
+        return 4;
+    }
+
+    opcodeLD_C_E() { // 0x4B: LD C, E
+        this.registers.C = this.registers.E;
+        this.registers.PC++;
+        return 4;
+    }
+
+    opcodeLD_C_H() { // 0x4C: LD C, H
+        this.registers.C = this.registers.H;
+        this.registers.PC++;
+        return 4;
+    }
+
+    opcodeLD_C_L() { // 0x4D: LD C, L
+        this.registers.C = this.registers.L;
         this.registers.PC++;
         return 4;
     }
@@ -1703,6 +1660,13 @@ class GameBoyCPU {
         return 8;
     }
 
+    opcodeLD_H_B() { // 0x60: LD H, B
+        // Load the value of register B into register H.
+        this.registers.H = this.registers.B;
+        this.registers.PC++;
+        return 4;
+    }
+
     opcodeLD_H_A() { // 0x67: LD H, A
         // Loads the value from register A into H.
         this.registers.H = this.registers.A;
@@ -1744,48 +1708,70 @@ class GameBoyCPU {
     }
 
     opcodeLD_L_HL() { // 0x6E: LD L, (HL)
-        this.registers.L = this.memory[this.registers.HL]; // Load the value from memory at address HL into register L
+        // // Load the value from memory at address HL into register L
+        this.registers.L = this.memory[this.registers.HL];
 
         this.registers.PC++;
         return 8;
     }
 
     opcodeLD_HL_B() { // 0x70: LD (HL), B
-        this.memory[this.registers.HL] = this.registers.B;
+        this.writeMemory(this.registers.HL, this.registers.B);
         this.registers.PC++;
         return 8;
     }
 
     opcodeLD_HL_C() { // 0x71: LD (HL), C
-        this.memory[this.registers.HL] = this.registers.C;
+        this.writeMemory(this.registers.HL, this.registers.C);
         this.registers.PC++;
         return 8;
     }
 
     opcodeLD_HL_D() { // 0x72: LD (HL), D
-        this.memory[this.registers.HL] = this.registers.D;
+        this.writeMemory(this.registers.HL, this.registers.D);
+        this.registers.PC++;
+        return 8;
+    }
+
+    opcodeLD_HL_L() { // 0x75: LD (HL), L
+        // Store L into memory at address HL.
+        this.writeMemory(this.registers.HL, this.registers.L);
         this.registers.PC++;
         return 8;
     }
 
     opcodeLD_HL_E() { // 0x73: LD (HL), E
-        this.memory[this.registers.HL] = this.registers.E; // Store the value of register E into memory at HL
-
+        // Store the value of register E into memory at HL
+        this.writeMemory(this.registers.HL, this.registers.E);
         this.registers.PC++;
         return 8;
     }
             
     opcodeHALT() { // 0x76: HALT - Freeze the CPU until reset
-        this.haltEnabled = true;
         console.log("HALT instruction executed");
+        const pendingInterrupts = (this.memory[0xFF0F] & this.memory[0xFFFF] & 0x1F) !== 0;
 
+        if (this.interruptsEnabled) {
+            // Normal HALT. CPU waits for an interrupt.
+            this.haltEnabled = true;
+        }
+        else {
+            if (pendingInterrupts) {
+                // HALT bug is triggered. The instruction after HALT is executed, but PC is not incremented.
+                this.haltBug = true;
+            }
+            else {
+                // Normal HALT, even with IME=0. CPU waits for an interrupt.
+                this.haltEnabled = true;
+            }
+        }
         this.registers.PC++;
         return 4;
     }
 
     opcodeLD_HL_A() { // 0x77: LD (HL), A
         // Store the value of register A into the memory address pointed to by HL.
-        this.memory[this.registers.HL] = this.registers.A;
+        this.writeMemory(this.registers.HL, this.registers.A);
         this.registers.PC++;
         return 8;
     }
@@ -1865,6 +1851,33 @@ class GameBoyCPU {
         return 4;
     }
 
+    opcodeADD_A_H() { // 0x84: ADD A, H
+        this.add(this.registers.H);
+        this.registers.PC++;
+        return 4;
+    }
+
+    opcodeADD_A_L() { // 0x85: ADD A, L
+        this.add(this.registers.L);
+        this.registers.PC++;
+        return 4;
+    }
+
+    opcodeADD_A_HL_mem() { // 0x86: ADD A, (HL)
+        // Adds the byte from the memory address in HL to A.
+        const value = this.memory[this.registers.HL];
+        this.add(value);
+        this.registers.PC++;
+        return 8;
+    }
+
+    opcodeADD_A_A() { // 0x87: ADD A, A
+        // Adds A to itself.
+        this.add(this.registers.A);
+        this.registers.PC++;
+        return 4;
+    }
+
     opcodeADC_A_B() { // 0x88: ADC A, B
         this.adc(this.registers.B);
         this.registers.PC++;
@@ -1897,9 +1910,35 @@ class GameBoyCPU {
         return 4;
     }
 
+    opcodeSBC_A_D() { // 0x9A: SBC A, D
+        // Subtract D and the Carry flag from A.
+        this.sbc(this.registers.D);
+        this.registers.PC++;
+        return 4;
+    }
+
+    opcodeAND_C() { // 0xA1: AND C
+        this.and(this.registers.C);
+        this.registers.PC++;
+        return 4;
+    }
+
+    opcodeAND_A() { // 0xA7: AND A
+        this.and(this.registers.A);
+        this.registers.PC++;
+        return 4;
+    }
+
     opcodeOR_B() { // 0xB0: OR B
         // Performs a bitwise OR between register A and register B.
         this.or(this.registers.B);
+        this.registers.PC++;
+        return 4;
+    }
+
+    opcodeOR_H() { // 0xB4: OR H
+        // Bitwise OR A with H.
+        this.or(this.registers.H);
         this.registers.PC++;
         return 4;
     }
@@ -1916,6 +1955,13 @@ class GameBoyCPU {
         this.or(value);
         this.registers.PC++;
         return 8;
+    }
+
+    opcodeOR_A() { // 0xB7: OR A
+        // Bitwise OR A with itself.
+        this.or(this.registers.A);
+        this.registers.PC++;
+        return 4;
     }
 
     opcodeCP_B() { // 0xB8: CP B
@@ -1946,8 +1992,30 @@ class GameBoyCPU {
         return 4;
     }
 
-    opcodeOR_A() { // 0xB7: OR A
-        this.or(this.registers.A);
+    opcodeCP_H() { // 0xBC: CP H
+        // Compare A with H.
+        this.cp(this.registers.H);
+        this.registers.PC++;
+        return 4;
+    }
+
+    opcodeCP_L() { // 0xBD: CP L
+        this.cp(this.registers.L);
+        this.registers.PC++;
+        return 4;
+    }
+
+    opcodeCP_HL() { // 0xBE: CP (HL)
+        // Compare A with the byte at the memory address in HL.
+        const value = this.memory[this.registers.HL];
+        this.cp(value);
+        this.registers.PC++;
+        return 8;
+    }
+
+    opcodeCP_A() { // 0xBF: CP A
+        // Compare A with itself.
+        this.cp(this.registers.A);
         this.registers.PC++;
         return 4;
     }
@@ -2009,7 +2077,8 @@ class GameBoyCPU {
             const highByte = this.memory[this.registers.PC + 2];
             this.registers.PC = (highByte << 8) | lowByte;
             return 16; // Cycles for jump taken
-        } else {
+        }
+        else {
             this.registers.PC += 3;
             return 12; // Cycles for jump not taken
         }
@@ -2031,6 +2100,20 @@ class GameBoyCPU {
         else {
             this.registers.PC++;
             return 8; // Cycles for return not taken
+        }
+    }
+
+    opcodeJP_Z_nn() { // 0xCA: JP Z, nn
+        // Jumps to a 16-bit address if the Zero flag is set.
+        if ((this.registers.F & 0x80) !== 0) {
+            const lowByte = this.memory[this.registers.PC + 1];
+            const highByte = this.memory[this.registers.PC + 2];
+            this.registers.PC = (highByte << 8) | lowByte;
+            return 16; // Cycles for jump taken
+        }
+        else {
+            this.registers.PC += 3;
+            return 12; // Cycles for jump not taken
         }
     }
 
@@ -2176,8 +2259,8 @@ class GameBoyCPU {
 
             const returnAddress = this.registers.PC + 3;
             this.registers.SP -= 2;
-            this.memory[this.registers.SP] = returnAddress & 0xFF;
-            this.memory[this.registers.SP + 1] = (returnAddress >> 8) & 0xFF;
+            this.writeMemory(this.registers.SP, returnAddress & 0xFF);
+            this.writeMemory(this.registers.SP + 1, (returnAddress >> 8) & 0xFF);
 
             this.registers.PC = address;
             return 24; // Call taken
@@ -2205,8 +2288,8 @@ class GameBoyCPU {
             // Push the current PC + 3 (next instruction) onto the stack
             const returnAddress = this.registers.PC + 3;
             this.registers.SP -= 2; // Decrement SP by 2 to reserve space
-            this.memory[this.registers.SP] = returnAddress & 0xFF;         // Store lower byte of PC
-            this.memory[this.registers.SP + 1] = (returnAddress >> 8) & 0xFF;    // Store higher byte of PC
+            this.writeMemory(this.registers.SP, returnAddress & 0xFF);            // Store lower byte of PC
+            this.writeMemory(this.registers.SP + 1, (returnAddress >> 8) & 0xFF); // Store higher byte of PC
 
             this.registers.PC = address; // Jump to the subroutine
             return 24; // Call taken
@@ -2226,8 +2309,8 @@ class GameBoyCPU {
         // Push the address of the next instruction (PC + 3) onto the stack
         const returnAddress = this.registers.PC + 3;
         this.registers.SP -= 2;
-        this.memory[this.registers.SP] = returnAddress & 0xFF;      // Low byte
-        this.memory[this.registers.SP + 1] = (returnAddress >> 8) & 0xFF; // High byte
+        this.writeMemory(this.registers.SP, returnAddress & 0xFF);            // Low byte
+        this.writeMemory(this.registers.SP + 1, (returnAddress >> 8) & 0xFF); // High byte
 
         this.registers.PC = address;
         return 24;
@@ -2285,6 +2368,14 @@ class GameBoyCPU {
         return 16;
     }
 
+    opcodeSBC_A_n() { // 0xDE: SBC A, n
+        // Subtract immediate 8-bit value n and Carry from A.
+        const n = this.memory[this.registers.PC + 1];
+        this.sbc(n);
+        this.registers.PC += 2;
+        return 8;
+    }
+
     opcodeCALL_NC_nn() { // 0xD4: CALL NC, nn
         // If C flag is not set, call address nn
         if ((this.registers.F & 0x10) === 0) {
@@ -2294,8 +2385,8 @@ class GameBoyCPU {
 
             const returnAddress = this.registers.PC + 3;
             this.registers.SP -= 2;
-            this.memory[this.registers.SP] = returnAddress & 0xFF;
-            this.memory[this.registers.SP + 1] = (returnAddress >> 8) & 0xFF;
+            this.writeMemory(this.registers.SP, returnAddress & 0xFF);
+            this.writeMemory(this.registers.SP + 1, (returnAddress >> 8) & 0xFF);
 
             this.registers.PC = address;
             return 24; // Call taken
@@ -2316,8 +2407,8 @@ class GameBoyCPU {
             // Push the current PC + 3 (next instruction) onto the stack
             const returnAddress = this.registers.PC + 3;
             this.registers.SP -= 2; // Decrement SP by 2 to reserve space
-            this.memory[this.registers.SP] = returnAddress & 0xFF;         // Store lower byte of PC
-            this.memory[this.registers.SP + 1] = (returnAddress >> 8) & 0xFF;    // Store higher byte of PC
+            this.writeMemory(this.registers.SP, returnAddress & 0xFF);            // Store lower byte of PC
+            this.writeMemory(this.registers.SP + 1, (returnAddress >> 8) & 0xFF); // Store higher byte of PC
     
             this.registers.PC = address; // Jump to the subroutine
             return 24; // Call taken
@@ -2342,10 +2433,17 @@ class GameBoyCPU {
         // Loads the value in the A register into memory at the address 0xFF00 + n, where n is an 8-bit immediate value
         const n = this.memory[this.registers.PC + 1]; // Fetch the immediate value
         const address = 0xFF00 + n;                   // Calculate the target address
-        this.memory[address] = this.registers.A;      // Store the value in A at the address
-
+        this.writeMemory(address, this.registers.A);  // Store the value in A at the address
+        
         this.registers.PC += 2; // Advance the program counter
         return 12;
+    }
+
+    opcodeLD_C_mem_A() { // 0xE2: LD (C), A
+        // Store A into memory at address 0xFF00 + C.
+        this.writeMemory(0xFF00 + this.registers.C, this.registers.A);
+        this.registers.PC++;
+        return 8;
     }
 
     opcodePOP_HL() { // 0xE1: POP HL
@@ -2353,6 +2451,31 @@ class GameBoyCPU {
         this.registers.HL = this.pop();
         this.registers.PC++;
         return 12;
+    }
+
+    opcodeADD_SP_n() { // 0xE8: ADD SP, n
+        // Add signed immediate 8-bit value n to SP.
+        const n_unsigned = this.memory[this.registers.PC + 1];
+        const n_signed = signedValue(n_unsigned);
+        const sp = this.registers.SP;
+
+        const result = sp + n_signed;
+
+        // Flags: Z=0, N=0
+        this.registers.F = 0;
+
+        // Half Carry: Check carry from bit 3 of (SP_low + n)
+        if (((sp & 0xF) + (n_unsigned & 0xF)) > 0xF) {
+            this.registers.F |= 0x20; // Set H
+        }
+        // Carry: Check carry from bit 7 of (SP_low + n)
+        if (((sp & 0xFF) + (n_unsigned & 0xFF)) > 0xFF) {
+            this.registers.F |= 0x10; // Set C
+        }
+
+        this.registers.SP = result & 0xFFFF;
+        this.registers.PC += 2;
+        return 16;
     }
 
     opcodeJP_HL() { // 0xE9: JP (HL)
@@ -2370,13 +2493,7 @@ class GameBoyCPU {
 
     opcodeAND_n() { // 0xE6: AND n
         const immediateValue = this.memory[this.registers.PC + 1]; // Fetch the immediate 8-bit value
-        this.registers.A &= immediateValue; // Perform bitwise AND and store result in A
-    
-        // Update flags
-        this.registers.F = 0; // Clear all flags
-        this.setZeroFlag(this.registers.A); // Set Z flag if result is zero
-        this.registers.F |= 0x20; // Set H flag (bit 5), always set for AND
-    
+        this.and(immediateValue);
         this.registers.PC += 2; // Advance PC by 2 (1 for opcode + 1 for immediate value)
         return 8;
     }
@@ -2387,7 +2504,7 @@ class GameBoyCPU {
         const highByte = this.memory[this.registers.PC + 2];
         const address = (highByte << 8) | lowByte;
 
-        this.memory[address] = this.registers.A;
+        this.writeMemory(address, this.registers.A);
         this.registers.PC += 3;
         return 16;
     }
@@ -2411,15 +2528,15 @@ class GameBoyCPU {
     }
 
     opcodeDI() { // 0xF3: DI - Disable interrupts
-        this.disableInterrupts(); // Disable interrupt handling
-
+        this.disableInterrupts();
+        this.imeScheduled = false; // DI also cancels a pending EI
         this.registers.PC++;
         return 4;
     }
 
     opcodeEI() { // 0xFB: EI
-        // Enables interrupts.
-        this.enableInterrupts();
+        // Interrupts are enabled *after* the instruction following EI.
+        this.imeScheduled = true;
         this.registers.PC++;
         return 4;
     }
@@ -2473,6 +2590,16 @@ class GameBoyCPU {
         this.registers.A = this.memory[address]; // Load value into A
 
         this.registers.PC += 3; // Advance PC by 3
+        return 16;
+    }
+
+    opcodeRST_28H() { // 0xEF: RST 28H
+        // Restart instruction, call to 0x0028.
+        const returnAddress = this.registers.PC + 1;
+        this.push((returnAddress >> 8) & 0xFF, returnAddress & 0xFF);
+
+        // Jump to address 0x0028
+        this.registers.PC = 0x0028;
         return 16;
     }
 

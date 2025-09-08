@@ -28,3 +28,14 @@ canvas {
 .red {
     color: rgb(189, 0, 0);
 }
+
+#serial > span {
+    font-family: monospace;
+    color: lime;
+    display: inline-block;
+    height: 26px;
+    line-height: 26px;
+    background-color: black;
+    padding: 0 8px;
+    border-radius: 20px;
+}

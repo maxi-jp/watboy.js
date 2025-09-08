@@ -13,6 +13,7 @@ var romInput = null;
 const gameboy = new GameBoy();
 
 const debugData = {
+    serial: null,
     registers: {
         a: null,
         b: null,
@@ -46,6 +47,7 @@ function Init() {
     ctx.imageSmoothingEnabled = false;
 
     // get html debug element references
+    debugData.serial = document.querySelector('#serial > span');
     for (const prop in debugData.registers) {
         debugData.registers[prop] = document.getElementById(`reg_${prop}`);
     }
@@ -187,6 +189,16 @@ function loadROM(file, onload) {
 }
 
 function updateDebugData() {
+    if (gameboy.cpu.serialBuffer !== '') {
+        if (debugData.serial.innerText !== gameboy.cpu.serialBuffer)
+            debugData.serial.classList.add('red');
+        else
+            debugData.serial.classList.remove('red');
+        debugData.serial.innerText = gameboy.cpu.serialBuffer;
+    }
+    else if (debugData.serial.classList.contains('red'))
+        debugData.serial.classList.remove('red');
+
     for (const prop in debugData.registers) {
         const val = gameboy.cpu.registers[prop.toUpperCase()];
         const newStr = `0x${val.toString(16)} (${val})`;
