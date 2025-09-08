@@ -6,6 +6,8 @@
 var canvas = /** @type {HTMLCanvasElement} */(null);
 var ctx = /** @type {CanvasRenderingContext2D} */(null);
 
+var debug = true;
+
 var romInput = null;
 
 const gameboy = new GameBoy();
@@ -100,7 +102,13 @@ function Loop() {
     if (deltaTime > 1)
         return;
 
-    if (Input.IsKeyDown(KEY_SPACE) || Input.IsKeyPressed(KEY_A)) {
+    if (!debug) {
+        // Game logic ---------
+        Update(deltaTime);
+        // Draw the game ------
+        Draw(ctx);
+    }
+    else if (Input.IsKeyDown(KEY_SPACE) || Input.IsKeyPressed(KEY_A)) {
         // Game logic ---------
         Update(deltaTime);
         

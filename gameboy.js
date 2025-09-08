@@ -9,7 +9,7 @@ class GameBoy {
 
     Initialize(canvas, ctx) {
         this.cpu = new GameBoyCPU();
-        this.gpu = new GameBoyGPU(canvas, ctx, this.screenWidth, this.screenHeight);
+        this.gpu = new GameBoyGPU(canvas, ctx, this.screenWidth, this.screenHeight, this.cpu.memory);
     }
     
     LoadRom(romData) {
