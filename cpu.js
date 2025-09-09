@@ -55,6 +55,8 @@ class GameBoyCPU {
 
         this.memoryBankSize = 0x4000; // 2KB
 
+        this.timer = new GameBoyTimer(this, this.memory);
+
         this.serialBuffer = "";
 
         this.MBC = null;
@@ -68,6 +70,14 @@ class GameBoyCPU {
         this.imeScheduled = false; // Flag to delay enabling interrupts
         this.imeDelay = false;
         this.haltBug = false;
+
+        this.INT = {
+            VBLANK: 0x01,
+            LCDC:   0x02,
+            TIMER:  0x04,
+            SERIAL: 0x08,
+            JOYPAD: 0x10
+        };
 
         this.opcodeHandlers = {
             0x00: this.opcodeNOP.bind(this),
@@ -498,7 +508,7 @@ class GameBoyCPU {
 
         const interruptCycles = this.handleInterrupts();
         if (interruptCycles > 0) {
-            this.updateTimer(interruptCycles);
+            this.timer.update(interruptCycles);
             return interruptCycles;
         }
 
@@ -558,7 +568,7 @@ class GameBoyCPU {
         }
 
         // Update timer after instruction execution
-        this.updateTimer(elapsedClockTicks);
+        this.timer.update(elapsedClockTicks);
 
         return elapsedClockTicks;
     }
@@ -567,38 +577,167 @@ class GameBoyCPU {
         return String.fromCharCode(...this.memory.slice(cartridgeNameAdress[0], cartridgeNameAdress[1]));
     }
 
-    // Helper method to handle timer updates
-    updateTimer(cycles) {
-        // Check if timer is enabled (bit 2 of TAC)
-        if (this.memory[0xFF07] & 0x04) {
-            // Get clock select bits from TAC
-            const freqBits = this.memory[0xFF07] & 0x03;
-            // Frequencies in Hz: 4096, 262144, 65536, 16384
-            const clockDividers = [1024, 16, 64, 256]; // CPU Clock (4194304 Hz) dividers
-            const divider = clockDividers[freqBits];
+    handleInterrupts() {
+        const IF = this.memory[0xFF0F]; // Interrupt Flag register
+        const IE = this.memory[0xFFFF]; // Interrupt Enable register
 
-            // Increment internal counter
-            this.timerCounter = (this.timerCounter || 0) + cycles;
-            console.log(`Timer update: cycles=${cycles}, timerCounter=${this.timerCounter}, TIMA=0x${this.memory[0xFF05].toString(16)}, divider=${divider}`);
+        const fired = IF & IE & 0x1F; // Only check the 5 interrupt bits
 
-            // Check if we need to increment TIMA
-            while (this.timerCounter >= divider) {
-                this.timerCounter -= divider;
-                
-                // Check if incrementing TIMA would cause overflow
-                if (this.memory[0xFF05] === 0xFF) {
-                    // Reset TIMA to TMA value and request interrupt
-                    this.memory[0xFF05] = this.memory[0xFF06]; // Load from TMA
-                    this.memory[0xFF0F] |= 0x04; // Request timer interrupt
-                    console.log(`Timer overflow: TIMA reset to 0x${this.memory[0xFF06].toString(16)}, interrupt requested, IF=0x${this.memory[0xFF0F].toString(16)}, A=0x${this.registers.A.toString(16)}`);
-                }
-                else {
-                    this.memory[0xFF05]++;
-                    console.log(`TIMA incremented to 0x${this.memory[0xFF05].toString(16)}`);
-                }
+        if (!this.interruptsEnabled) {
+            if (this.haltEnabled && fired !== 0) {
+                // Wake from HALT but don't service interrupts when IME=0
+                this.haltEnabled = false;
+                console.log("HALT exit due to pending interrupt");
             }
+            return 0;
+        }
+
+        // console.log(`Interrupt check:
+        //     IF=${IF.toString(2).padStart(8,'0')} (${IF.toString(16)})
+        //     IE=${IE.toString(2).padStart(8,'0')} (${IE.toString(16)})
+        //     Fired=${fired.toString(2).padStart(8,'0')} (${fired.toString(16)})
+        //     PC=0x${this.registers.PC.toString(16)}
+        // `);
+        
+        if (fired === 0) {
+            return 0;
+        }
+
+        // An interrupt occurred, wake from HALT
+        this.haltEnabled = false;
+
+        // Standard interrupt sequence (5 M-cycles):
+        // M1: Opcode fetch (discarded)
+        // M2: Push PCh
+        // M3: Push PCl
+        // M4-M5: Jump to vector
+
+        // Push current PC to stack before handling interrupt
+        const returnAddr = this.registers.PC;
+        this.push((returnAddr >> 8) & 0xFF, returnAddr & 0xFF);
+        console.log(`Pushed return address 0x${returnAddr.toString(16)} to stack`);
+
+        // Disable master interrupt flag
+        this.interruptsEnabled = false;
+        console.log("Disabled interrupts for handler");
+
+        // An interrupt handling sequence takes 5 machine cycles (20 clock cycles).
+        
+        // Handle individual interrupts in priority order
+        let handlerAddr = 0;
+        // V-Blank Interrupt (Priority 0)
+        if (fired & 0x01) {
+            this.memory[0xFF0F] &= ~0x01; // Clear V-Blank interrupt flag
+            handlerAddr = 0x0040;
+        }
+        // LCD STAT Interrupt (Priority 1)
+        else if (fired & 0x02) {
+            this.memory[0xFF0F] &= ~0x02; // Clear LCD STAT interrupt flag
+            handlerAddr = 0x0048;
+        }
+        // Timer Interrupt (Priority 2)
+        else if (fired & 0x04) {
+            this.memory[0xFF0F] &= ~0x04; // Clear Timer interrupt flag
+            handlerAddr = 0x0050;
+
+            console.log("Timer interrupt handled, A=", this.registers.A.toString(16));
+        }
+        // Serial Interrupt (Piority 3)
+        else if (fired & 0x08) {
+            this.memory[0xFF0F] &= ~0x08;
+            handlerAddr = 0x0058;
+        }
+        // Joypad Interrupt (Priority 4)
+        else if (fired & 0x10) {
+            this.memory[0xFF0F] &= ~0x10;
+            handlerAddr = 0x0060;
+        }
+
+        console.log(`Jumping to interrupt handler at 0x${handlerAddr.toString(16)}`);
+        console.log(`Handler contains opcodes: ${Array.from(this.memory.slice(handlerAddr, handlerAddr + 4)).map(x => x.toString(16).padStart(2, '0')).join(' ')}`);
+        this.registers.PC = handlerAddr;
+
+        return 20; // 5 M-cycles (20 T-cycles)
+    }
+
+    requestInterrupt(type) {
+        let IFval = this.memory[0xFF0F];
+        IFval |= type
+        this.writeMemory(0xFF0F, IFval);
+        this.haltEnabled = false;
+    }
+
+    enableInterrupts() {
+        this.interruptsEnabled = true; // Enable interrupt handling
+    }
+
+    disableInterrupts() {
+        this.interruptsEnabled = false; // Disable interrupt handling
+    }
+
+// #region flags update helper functions
+
+    // Helper function to set the Zero flag based on register value
+    setZeroFlag(value) {
+        if (value === 0) {
+            this.registers.F |= 0x80; // Set Z flag (bit 7)
+        }
+        else {
+            this.registers.F &= ~0x80; // Clear Z flag (bit 7)
         }
     }
+
+    // Set the Negative flag (N) for subtraction
+    setSubtractFlag() {
+        this.registers.F |= 0x40; // Set N flag (bit 6) for subtraction
+    }
+
+    clearSubtractFlag() {
+        this.registers.F &= ~0x40; // Clear N flag (bit 6)
+    }
+
+    // Set the Half Carry flag (H) based on the subtraction
+    setHalfCarryFlag(A, n) {
+        // Half carry occurs if there's a borrow from bit 4
+        if (((A & 0xF) - (n & 0xF)) < 0) {
+            this.registers.F |= 0x20; // Set H flag (bit 5)
+        }
+        else {
+            this.registers.F &= ~0x20; // Clear H flag (bit 5)
+        }
+    }
+
+    setHalfCarryFlagForAdd(a, b, c = 0) {
+        if (((a & 0xF) + (b & 0xF) + c) > 0xF) {
+            this.registers.F |= 0x20; // Set H flag
+        }
+        else {
+            this.registers.F &= ~0x20; // Clear H flag
+        }
+    }
+
+    // Set the Carry flag (C) based on the subtraction result
+    setCarryFlag(isSet) {
+        if (isSet) {
+            this.registers.F |= 0x10; // Set C flag (bit 4)
+        }
+        else {
+            this.registers.F &= ~0x10; // Clear C flag (bit 4)
+        }
+    }
+
+    setHalfCarryFlagForAdd(a, b, c = 0) {
+        if (((a & 0xF) + (b & 0xF) + c) > 0xF) {
+            this.registers.F |= 0x20; // Set H flag
+        }
+        else {
+            this.registers.F &= ~0x20; // Clear H flag
+        }
+    }
+
+// #endregion (flags update helper functions)
+
+// #region opcode helper functions
 
     // Helper function to add a value to the A register and update flags
     add(value) {
@@ -726,155 +865,6 @@ class GameBoyCPU {
         this.setCarryFlag(result < 0);
     }
 
-    // Helper function to set the Zero flag based on register value
-    setZeroFlag(value) {
-        if (value === 0) {
-            this.registers.F |= 0x80; // Set Z flag (bit 7)
-        }
-        else {
-            this.registers.F &= ~0x80; // Clear Z flag (bit 7)
-        }
-    }
-
-    // Set the Negative flag (N) for subtraction
-    setSubtractFlag() {
-        this.registers.F |= 0x40; // Set N flag (bit 6) for subtraction
-    }
-
-    clearSubtractFlag() {
-        this.registers.F &= ~0x40; // Clear N flag (bit 6)
-    }
-
-    // Set the Half Carry flag (H) based on the subtraction
-    setHalfCarryFlag(A, n) {
-        // Half carry occurs if there's a borrow from bit 4
-        if (((A & 0xF) - (n & 0xF)) < 0) {
-            this.registers.F |= 0x20; // Set H flag (bit 5)
-        }
-        else {
-            this.registers.F &= ~0x20; // Clear H flag (bit 5)
-        }
-    }
-
-    setHalfCarryFlagForAdd(a, b, c = 0) {
-        if (((a & 0xF) + (b & 0xF) + c) > 0xF) {
-            this.registers.F |= 0x20; // Set H flag
-        }
-        else {
-            this.registers.F &= ~0x20; // Clear H flag
-        }
-    }
-
-    // Set the Carry flag (C) based on the subtraction result
-    setCarryFlag(isSet) {
-        if (isSet) {
-            this.registers.F |= 0x10; // Set C flag (bit 4)
-        }
-        else {
-            this.registers.F &= ~0x10; // Clear C flag (bit 4)
-        }
-    }
-
-    setHalfCarryFlagForAdd(a, b, c = 0) {
-        if (((a & 0xF) + (b & 0xF) + c) > 0xF) {
-            this.registers.F |= 0x20; // Set H flag
-        }
-        else {
-            this.registers.F &= ~0x20; // Clear H flag
-        }
-    }
-
-    handleInterrupts() {
-        const IF = this.memory[0xFF0F]; // Interrupt Flag register
-        const IE = this.memory[0xFFFF]; // Interrupt Enable register
-
-        const fired = IF & IE & 0x1F; // Only check the 5 interrupt bits
-
-        if (!this.interruptsEnabled) {
-            if (this.haltEnabled && fired !== 0) {
-                // Wake from HALT but don't service interrupts when IME=0
-                this.haltEnabled = false;
-                console.log("HALT exit due to pending interrupt");
-            }
-            return 0;
-        }
-
-        // console.log(`Interrupt check:
-        //     IF=${IF.toString(2).padStart(8,'0')} (${IF.toString(16)})
-        //     IE=${IE.toString(2).padStart(8,'0')} (${IE.toString(16)})
-        //     Fired=${fired.toString(2).padStart(8,'0')} (${fired.toString(16)})
-        //     PC=0x${this.registers.PC.toString(16)}
-        // `);
-        
-        if (fired === 0) {
-            return 0;
-        }
-
-        // An interrupt occurred, wake from HALT
-        this.haltEnabled = false;
-
-        // Standard interrupt sequence (5 M-cycles):
-        // M1: Opcode fetch (discarded)
-        // M2: Push PCh
-        // M3: Push PCl
-        // M4-M5: Jump to vector
-
-        // Push current PC to stack before handling interrupt
-        const returnAddr = this.registers.PC;
-        this.push((returnAddr >> 8) & 0xFF, returnAddr & 0xFF);
-        console.log(`Pushed return address 0x${returnAddr.toString(16)} to stack`);
-
-        // Disable master interrupt flag
-        this.interruptsEnabled = false;
-        console.log("Disabled interrupts for handler");
-
-        // An interrupt handling sequence takes 5 machine cycles (20 clock cycles).
-        
-        // Handle individual interrupts in priority order
-        let handlerAddr = 0;
-        // V-Blank Interrupt (Priority 0)
-        if (fired & 0x01) {
-            this.memory[0xFF0F] &= ~0x01; // Clear V-Blank interrupt flag
-            handlerAddr = 0x0040;
-        }
-        // LCD STAT Interrupt (Priority 1)
-        else if (fired & 0x02) {
-            this.memory[0xFF0F] &= ~0x02; // Clear LCD STAT interrupt flag
-            handlerAddr = 0x0048;
-        }
-        // Timer Interrupt (Priority 2)
-        else if (fired & 0x04) {
-            this.memory[0xFF0F] &= ~0x04; // Clear Timer interrupt flag
-            handlerAddr = 0x0050;
-
-            console.log("Timer interrupt handled, A=", this.registers.A.toString(16));
-        }
-        // Serial Interrupt (Piority 3)
-        else if (fired & 0x08) {
-            this.memory[0xFF0F] &= ~0x08;
-            handlerAddr = 0x0058;
-        }
-        // Joypad Interrupt (Priority 4)
-        else if (fired & 0x10) {
-            this.memory[0xFF0F] &= ~0x10;
-            handlerAddr = 0x0060;
-        }
-
-        console.log(`Jumping to interrupt handler at 0x${handlerAddr.toString(16)}`);
-        console.log(`Handler contains opcodes: ${Array.from(this.memory.slice(handlerAddr, handlerAddr + 4)).map(x => x.toString(16).padStart(2, '0')).join(' ')}`);
-        this.registers.PC = handlerAddr;
-
-        return 20; // 5 M-cycles (20 T-cycles)
-    }
-
-    enableInterrupts() {
-        this.interruptsEnabled = true; // Enable interrupt handling
-    }
-
-    disableInterrupts() {
-        this.interruptsEnabled = false; // Disable interrupt handling
-    }
-
     // Helper for PUSH opcodes
     push(highByte, lowByte) {
         // write to stack with direct memory access to avoid triggering I/O handlers
@@ -929,7 +919,10 @@ class GameBoyCPU {
         }
     }
 
-    //#region opcode functions
+// #endregion (opcode helper functions)
+
+// #region opcode functions
+
     // ---------------------- opcode functions ------------------------
     // Opcode handlers (e.g., NOP, LD, ADD, etc.)
     // https://pastraiser.com/cpu/gameboy/gameboy_opcodes.html
@@ -2741,5 +2734,5 @@ class GameBoyCPU {
         return 4; // Return default cycles
     }
 
-    //#endregion
+// #endregion (opcode functions)
 }
