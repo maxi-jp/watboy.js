@@ -73,7 +73,7 @@ class GameBoyCPU {
 
         this.INT = {
             VBLANK: 0x01,
-            LCDC:   0x02,
+            LCD:    0x02,
             TIMER:  0x04,
             SERIAL: 0x08,
             JOYPAD: 0x10
@@ -338,26 +338,10 @@ class GameBoyCPU {
     }
 
     writeMemory(address, value) {
-        // Handle timer registers
-        if (address === 0xFF0F) {
-            // TODO delete this if
-            console.log(`Writing to IF (0xFF0F): 0x${value.toString(16)}, previous IF=0x${this.memory[0xFF0F].toString(16)}`);
-        }
-        if (address === 0xFF07) { // Timer Control (TAC)
-            const oldTAC = this.memory[0xFF07];
-            this.memory[0xFF07] = value;
-            
-            // Only log and reset counter if timer state actually changes
-            if ((oldTAC & 0x04) !== (value & 0x04) || (oldTAC & 0x03) !== (value & 0x03)) {
-                console.log(`Timer Control set: enabled=${(value & 0x04) ? 'true' : 'false'}, freq=${value & 0x03}`);
-                this.timerCounter = 0;
-            }
-        }
-        else if (address === 0xFF05) { // Timer Counter (TIMA)
-            this.memory[0xFF05] = value;
-        }
-        else if (address === 0xFF06) { // Timer Modulo (TMA)
-            this.memory[0xFF06] = value;
+        // Writing to the DIV register (0xFF04) resets its internal counter to 0 (the value written is ignored).
+        if (address === 0xFF04) {
+            this.timer.resetDiv();
+            return;
         }
 
         // memory write operation
@@ -626,30 +610,30 @@ class GameBoyCPU {
         // Handle individual interrupts in priority order
         let handlerAddr = 0;
         // V-Blank Interrupt (Priority 0)
-        if (fired & 0x01) {
-            this.memory[0xFF0F] &= ~0x01; // Clear V-Blank interrupt flag
+        if (fired & this.INT.VBLANK) {
+            this.memory[0xFF0F] &= ~this.INT.VBLANK; // Clear V-Blank interrupt flag
             handlerAddr = 0x0040;
         }
         // LCD STAT Interrupt (Priority 1)
-        else if (fired & 0x02) {
-            this.memory[0xFF0F] &= ~0x02; // Clear LCD STAT interrupt flag
+        else if (fired & this.INT.LCD) {
+            this.memory[0xFF0F] &= ~this.INT.LCD; // Clear LCD STAT interrupt flag
             handlerAddr = 0x0048;
         }
         // Timer Interrupt (Priority 2)
-        else if (fired & 0x04) {
-            this.memory[0xFF0F] &= ~0x04; // Clear Timer interrupt flag
+        else if (fired & this.INT.TIMER) {
+            this.memory[0xFF0F] &= ~this.INT.TIMER; // Clear Timer interrupt flag
             handlerAddr = 0x0050;
 
             console.log("Timer interrupt handled, A=", this.registers.A.toString(16));
         }
         // Serial Interrupt (Piority 3)
-        else if (fired & 0x08) {
-            this.memory[0xFF0F] &= ~0x08;
+        else if (fired & this.INT.SERIAL) {
+            this.memory[0xFF0F] &= ~this.INT.SERIAL; // Clear Serial interrupt flagº
             handlerAddr = 0x0058;
         }
         // Joypad Interrupt (Priority 4)
-        else if (fired & 0x10) {
-            this.memory[0xFF0F] &= ~0x10;
+        else if (fired & this.INT.JOYPAD) {
+            this.memory[0xFF0F] &= ~this.INT.JOYPAD; // Clear Joypad interrupt flag;
             handlerAddr = 0x0060;
         }
 
