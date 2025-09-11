@@ -10,16 +10,18 @@ class GameBoyTimer {
     set TMA (v) { this.memory[0xFF06] = v; }
     set TAC (v) { this.memory[0xFF07] = v; }
 
-    constructor(cpu, memory) {
-        this.cpu = cpu;
-        this.memory = memory;
-
+    constructor() {
         // Internal counters for DIV and TIMA, measured in T-cycles (CPU clock cycles)
         this.divCounter = 0;
         this.timaCounter = 0;
 
         // CPU clock cycles needed for one TIMA increment
         this.clockDividers = [1024, 16, 64, 256]; // CPU Clock (4194304 Hz) dividers
+    }
+
+    setCPU(cpu, memory) {
+        this.cpu = cpu;
+        this.memory = memory;
     }
 
     update(cycles) {

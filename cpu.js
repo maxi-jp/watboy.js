@@ -1,5 +1,14 @@
 class GameBoyCPU {
-    constructor() {
+
+    get IF() { return this.memory[0xFF0F]; }
+    get IE() { return this.memory[0XFFFF]; } // Interrupt Enable Register
+
+    set IF(v) { this.memory[0xFF0F] = v; }
+    set IE(v) { this.memory[0XFFFF] = v; }
+
+    constructor(timer) {
+        this.timer = timer;
+
         // Private storage for 8-bit registers
         const _r = {
             A: 0, B: 0, C: 0, D: 0, E: 0, F: 0, H: 0, L: 0, 
@@ -54,8 +63,6 @@ class GameBoyCPU {
         // Interrupt Enable Register: 0xFFFF
 
         this.memoryBankSize = 0x4000; // 2KB
-
-        this.timer = new GameBoyTimer(this, this.memory);
 
         this.serialBuffer = "";
 
@@ -496,17 +503,16 @@ class GameBoyCPU {
             return interruptCycles;
         }
 
-        
         const pcBefore = this.registers.PC;
-        // console.log(`Before instruction: PC=0x${pcBefore.toString(16)}, A=0x${this.registers.A.toString(16)}, F=0x${this.registers.F.toString(16)}, IF=0x${this.memory[0xFF0F].toString(16)}, IE=0x${this.memory[0xFFFF].toString(16)}, IME=${this.interruptsEnabled}`);
-
+        // console.log(`Before instruction: PC=0x${pcBefore.toString(16)}, A=0x${this.registers.A.toString(16)}, F=0x${this.registers.F.toString(16)}, IF=0x${this.IF.toString(16)}, IE=0x${this.IE.toString(16)}, IME=${this.interruptsEnabled}`);
 
         if (this.haltEnabled) {
             // return 4; // CPU is halted, burn 4 cycles and check for interrupts again next time.
 
-            const pendingInterrupts = (this.memory[0xFF0F] & this.memory[0xFFFF] & 0x1F) !== 0;
+            const pendingInterrupts = (this.IF & this.IE & 0x1F) !== 0;
             if (!pendingInterrupts) {
-                console.log("CPU halted, no pending interrupts");
+                console.log(`CPU halted, no pending interrupts (IF=0x${this.IF.toString(16)}, IE=0x${this.IE.toString(16)})`);
+                this.timer.update(4);
                 return 4;
             }
             console.log("Resuming from HALT due to pending interrupt");
@@ -562,8 +568,8 @@ class GameBoyCPU {
     }
 
     handleInterrupts() {
-        const IF = this.memory[0xFF0F]; // Interrupt Flag register
-        const IE = this.memory[0xFFFF]; // Interrupt Enable register
+        const IF = this.IF; // Interrupt Flag register
+        const IE = this.IE; // Interrupt Enable register
 
         const fired = IF & IE & 0x1F; // Only check the 5 interrupt bits
 
@@ -611,29 +617,29 @@ class GameBoyCPU {
         let handlerAddr = 0;
         // V-Blank Interrupt (Priority 0)
         if (fired & this.INT.VBLANK) {
-            this.memory[0xFF0F] &= ~this.INT.VBLANK; // Clear V-Blank interrupt flag
+            this.IF &= ~this.INT.VBLANK; // Clear V-Blank interrupt flag
             handlerAddr = 0x0040;
         }
         // LCD STAT Interrupt (Priority 1)
         else if (fired & this.INT.LCD) {
-            this.memory[0xFF0F] &= ~this.INT.LCD; // Clear LCD STAT interrupt flag
+            this.IF &= ~this.INT.LCD; // Clear LCD STAT interrupt flag
             handlerAddr = 0x0048;
         }
         // Timer Interrupt (Priority 2)
         else if (fired & this.INT.TIMER) {
-            this.memory[0xFF0F] &= ~this.INT.TIMER; // Clear Timer interrupt flag
+            this.IF &= ~this.INT.TIMER; // Clear Timer interrupt flag
             handlerAddr = 0x0050;
 
             console.log("Timer interrupt handled, A=", this.registers.A.toString(16));
         }
         // Serial Interrupt (Piority 3)
         else if (fired & this.INT.SERIAL) {
-            this.memory[0xFF0F] &= ~this.INT.SERIAL; // Clear Serial interrupt flagº
+            this.IF &= ~this.INT.SERIAL; // Clear Serial interrupt flagº
             handlerAddr = 0x0058;
         }
         // Joypad Interrupt (Priority 4)
         else if (fired & this.INT.JOYPAD) {
-            this.memory[0xFF0F] &= ~this.INT.JOYPAD; // Clear Joypad interrupt flag;
+            this.IF &= ~this.INT.JOYPAD; // Clear Joypad interrupt flag;
             handlerAddr = 0x0060;
         }
 
@@ -645,9 +651,10 @@ class GameBoyCPU {
     }
 
     requestInterrupt(type) {
-        let IFval = this.memory[0xFF0F];
-        IFval |= type
-        this.writeMemory(0xFF0F, IFval);
+        // let IFval = this.IF;
+        // IFval |= type
+        // this.writeMemory(0xFF0F, IFval);
+        this.IF |= type;
         this.haltEnabled = false;
     }
 
@@ -1838,9 +1845,9 @@ class GameBoyCPU {
             
     opcodeHALT() { // 0x76: HALT - Freeze the CPU until reset
         // console.log("HALT instruction executed");
-        console.log(`HALT at PC=0x${this.registers.PC.toString(16)}, IME=${this.interruptsEnabled}, IF=0x${this.memory[0xFF0F].toString(16)}, IE=0x${this.memory[0xFFFF].toString(16)}, A=0x${this.registers.A.toString(16)}`);
+        console.log(`HALT at PC=0x${this.registers.PC.toString(16)}, IME=${this.interruptsEnabled}, IF=0x${this.IF.toString(16)}, IE=0x${this.IE.toString(16)}, A=0x${this.registers.A.toString(16)}`);
 
-        const pendingInterrupts = (this.memory[0xFF0F] & this.memory[0xFFFF] & 0x1F) !== 0;
+        const pendingInterrupts = (this.IF & this.IE & 0x1F) !== 0;
 
         if (!this.interruptsEnabled && pendingInterrupts) {
             // HALT bug occurs when interrupts are disabled but there's a pending interrupt

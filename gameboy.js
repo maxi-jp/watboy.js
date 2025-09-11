@@ -4,12 +4,16 @@ class GameBoy {
         this.screenHeight = 144;
         this.cpu = null;
         this.gpu = null;
+        this.timer = null;
         this.romLoaded = null;
     }
 
     Initialize(canvas, ctx) {
-        this.cpu = new GameBoyCPU();
+        this.timer = new GameBoyTimer();
+        this.cpu = new GameBoyCPU(this.timer);
         this.gpu = new GameBoyGPU(canvas, ctx, this.screenWidth, this.screenHeight, this.cpu.memory);
+        
+        this.timer.setCPU(this.cpu, this.cpu.memory);
     }
     
     LoadRom(romData) {
