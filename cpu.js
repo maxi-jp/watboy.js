@@ -12,6 +12,7 @@ class GameBoyCPU {
         // Private storage for 8-bit registers
         const _r = {
             A: 0, B: 0, C: 0, D: 0, E: 0, F: 0, H: 0, L: 0, 
+            SP: 0, PC: 0,
         };
 
         this.registers = {
@@ -30,8 +31,9 @@ class GameBoyCPU {
             get DE() { return (_r.D << 8) | _r.E; }, set DE(v) { _r.D = (v >> 8) & 0xFF; _r.E = v & 0xFF; },
             get HL() { return (_r.H << 8) | _r.L; }, set HL(v) { _r.H = (v >> 8) & 0xFF; _r.L = v & 0xFF; },
 
-            SP: 0xFFFE, // Stack pointer
-            PC: 0x0, // Program counter
+            get SP() { return _r.SP; }, set SP(v) { _r.SP = v & 0xFFFF; },
+            get PC() { return _r.PC; }, set PC(v) { _r.PC = v & 0xFFFF; },
+
             lastPC: 0 // copy of the last PC
         };
 
@@ -504,6 +506,8 @@ class GameBoyCPU {
         }
 
         const pcBefore = this.registers.PC;
+        this.registers.lastPC = pcBefore;
+
         // console.log(`Before instruction: PC=0x${pcBefore.toString(16)}, A=0x${this.registers.A.toString(16)}, F=0x${this.registers.F.toString(16)}, IF=0x${this.IF.toString(16)}, IE=0x${this.IE.toString(16)}, IME=${this.interruptsEnabled}`);
 
         if (this.haltEnabled) {
@@ -540,7 +544,7 @@ class GameBoyCPU {
         else {
             this.lastOpcodeHandlerName = "UNKNOWN";
             console.warn(`Unimplemented opcode: 0x${opcode.toString(16)} at address 0x${this.registers.PC.toString(16)}`);
-            this.registers.PC = (this.registers.PC + 1) & 0xFFFF; // Skip the unhandled opcode
+            this.registers.PC++; // Skip the unhandled opcode
         }
 
         if (this.haltBug) {
@@ -858,27 +862,17 @@ class GameBoyCPU {
 
     // Helper for PUSH opcodes
     push(highByte, lowByte) {
-        // write to stack with direct memory access to avoid triggering I/O handlers
-        this.registers.SP = (this.registers.SP - 1) & 0xFFFF;
-        this.memory[this.registers.SP] = highByte & 0xFF;
-        // mirror Work RAM <-> Echo RAM if applicable
-        if (this.registers.SP >= 0xC000 && this.registers.SP <= 0xDDFF) {
-            this.memory[this.registers.SP + 0x2000] = this.memory[this.registers.SP];
-        }
-
-        this.registers.SP = (this.registers.SP - 1) & 0xFFFF;
-        this.memory[this.registers.SP] = lowByte & 0xFF;
-        if (this.registers.SP >= 0xC000 && this.registers.SP <= 0xDDFF) {
-            this.memory[this.registers.SP + 0x2000] = this.memory[this.registers.SP];
-        }
+        this.registers.SP--;
+        this.writeMemory(this.registers.SP, highByte);
+        this.registers.SP--;
+        this.writeMemory(this.registers.SP, lowByte);
     }
 
     // Helper for POP opcodes
     pop() {
         const lowByte = this.memory[this.registers.SP];
-        this.registers.SP = (this.registers.SP + 1) & 0xFFFF;
-        const highByte = this.memory[this.registers.SP];
-        this.registers.SP = (this.registers.SP + 1) & 0xFFFF;
+        const highByte = this.memory[this.registers.SP + 1];
+        this.registers.SP += 2;
         return (highByte << 8) | lowByte;
     }
 
@@ -1379,41 +1373,37 @@ class GameBoyCPU {
 
     opcodeDAA() { // 0x27: DAA (Decimal Adjust Accumulator)
         let a = this.registers.A;
-        let correction = 0;
-        let carry = (this.registers.F & 0x10) !== 0;
+        const n_flag = (this.registers.F & 0x40) !== 0;
+        const h_flag = (this.registers.F & 0x20) !== 0;
+        let c_flag = (this.registers.F & 0x10) !== 0;
 
-        if (!(this.registers.F & 0x40)) { // N flag is not set (addition)
-            if (carry || (a > 0x99)) {
-                correction = 0x60;
-                carry = true;
+        if (!n_flag) { // After addition
+            if (c_flag || a > 0x99) {
+                a += 0x60;
+                c_flag = true;
             }
-            if ((this.registers.F & 0x20) || ((a & 0x0F) > 0x09)) {
-                correction |= 0x06;
+            if (h_flag || (a & 0x0F) > 0x09){
+                a += 0x06;
             }
-            a += correction;
         }
-        else { // N flag is set (subtraction)
-            if (carry) {
-                correction = 0x60;
-            }
-            if (this.registers.F & 0x20) {
-                correction |= 0x06;
-            }
-            a -= correction;
+        else { // After subtraction
+            if (c_flag)
+                a -= 0x60;
+            if (h_flag)
+                a -= 0x06;
         }
 
-        this.registers.A = a & 0xFF;
+        this.registers.A = a;
 
         // Update flags
         this.setZeroFlag(this.registers.A);
         this.registers.F &= ~0x20; // H flag is always cleared
 
-        if (carry) {
+        if (c_flag)
             this.registers.F |= 0x10;
-        }
-        else {
+        else
             this.registers.F &= ~0x10;
-        }
+        
         this.registers.PC++;
         return 4;
     }
@@ -2632,7 +2622,7 @@ class GameBoyCPU {
         // schedule IME to be enabled after next instruction
         // IME must be enabled after the following instruction executes
         this.imeScheduled = true;
-        this.registers.PC = (this.registers.PC + 1) & 0xFFFF;
+        this.registers.PC++;
         return 4;
     }
 

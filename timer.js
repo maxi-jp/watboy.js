@@ -43,7 +43,7 @@ class GameBoyTimer {
         const freqBits = this.TAC & 0x03;
         const divider = this.clockDividers[freqBits];
 
-        console.log(`Timer update: cycles=${cycles}, timaCounter=${this.timaCounter}, TIMA=0x${this.TIMA.toString(16)}, divider=${divider}`);
+        // console.log(`Timer update: cycles=${cycles}, timaCounter=${this.timaCounter}, TIMA=0x${this.TIMA.toString(16)}, divider=${divider}`);
 
         // Check if enough cycles have passed to increment TIMA
         while (this.timaCounter >= divider) {
@@ -57,12 +57,12 @@ class GameBoyTimer {
                 tima = this.TMA; // Reset TIMA to the value in TMA
                 this.cpu.requestInterrupt(this.cpu.INT.TIMER); // Request a timer interrupt
 
-                console.log(`Timer overflow: TIMA reset to 0x${this.TMA.toString(16)}, interrupt requested, IF=0x${this.memory[0xFF0F].toString(16)}, A=0x${this.cpu.registers.A.toString(16)}`);
+                // console.log(`Timer overflow: TIMA reset to 0x${this.TMA.toString(16)}, interrupt requested, IF=0x${this.memory[0xFF0F].toString(16)}, A=0x${this.cpu.registers.A.toString(16)}`);
             }
             
             this.TIMA = tima
 
-            console.log(`TIMA incremented to 0x${this.TIMA.toString(16)}`);
+            // console.log(`TIMA incremented to 0x${this.TIMA.toString(16)}`);
         }
     }
 
