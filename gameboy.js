@@ -11,7 +11,7 @@ class GameBoy {
     Initialize(canvas, ctx) {
         this.timer = new GameBoyTimer();
         this.cpu = new GameBoyCPU(this.timer);
-        this.gpu = new GameBoyGPU(canvas, ctx, this.screenWidth, this.screenHeight, this.cpu.memory);
+        this.gpu = new GameBoyGPU(canvas, ctx, this.screenWidth, this.screenHeight, this.cpu);
         
         this.timer.setCPU(this.cpu, this.cpu.memory);
     }
@@ -20,7 +20,6 @@ class GameBoy {
         this.romLoaded = romData;
         this.cpu.loadROM(romData);
         this.cpu.start(); // Start the emulation
-        //gameboy.cpu.run(); 
     }
 
     RunFrame() {
@@ -30,7 +29,13 @@ class GameBoy {
         while (cyclesThisFrame < cyclesPerFrame) {
             const cycles = this.cpu.runStep();
             cyclesThisFrame += cycles;
-            this.gpu.update(cycles);
+
+            // In STOP mode, the timer and GPU are paused.
+            // The CPU will burn cycles until a joypad press wakes it up.
+            // if (!this.cpu.stopEnabled) {
+                this.timer.update(cycles);
+                this.gpu.update(cycles);
+            // }
         }
     }
 

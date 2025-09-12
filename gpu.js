@@ -6,12 +6,13 @@ const GPU_MODES = {
 }
 
 class GameBoyGPU {
-    constructor(canvas, ctx, screenWidth, screenHeight, memory) {
+    constructor(canvas, ctx, screenWidth, screenHeight, cpu) {
         this.canvas = canvas;
         this.ctx = ctx ? ctx : canvas.getContext('2d');
         this.screenWidth = screenWidth;
         this.screenHeight = screenHeight;
-        this.memory = memory;
+        this.cpu = cpu;
+        this.memory = cpu.memory;
 
         this.frameBuffer = new Uint8Array(this.screenWidth * this.screenHeight).fill(0);
 
@@ -46,7 +47,7 @@ class GameBoyGPU {
                     this.memory[0xFF44] = this.line; // Update LY register
                     if (this.line === 144) {
                         this.mode = GPU_MODES.VBLANK; // Enter VBlank
-                        this.memory[0xFF0F] |= 0x01; // Request V-Blank Interrupt
+                        this.cpu.requestInterrupt(this.cpu.INT.VBLANK); // Request V-Blank Interrupt
                         vblank = true;
                         this.drawFrame();
                     }
