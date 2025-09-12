@@ -79,6 +79,7 @@ class GameBoyCPU {
         this.imeScheduled = false; // Flag to delay enabling interrupts
         this.imeDelay = false;
         this.haltBug = false;
+        this.haltBugScheduled = false;
 
         this.INT = {
             VBLANK: 0x01,
@@ -371,8 +372,10 @@ class GameBoyCPU {
             // Print the character in 0xFF01
             const char = String.fromCharCode(this.memory[0xFF01]);
             this.serialBuffer += char;
-            if (char === '\n' || this.serialBuffer.endsWith("ok")) {
+            if (char === '\n' || char === '\r' || this.serialBuffer.endsWith("ok")) {
                 console.log("SERIAL:", this.serialBuffer.trim());
+                if (this.serialBuffer.endsWith("12"))
+                    debugger;
                 this.serialBuffer = "";
             }
         }
@@ -493,76 +496,72 @@ class GameBoyCPU {
     }
 
     runStep() {
-        // Clear any delayed IME enable from previous instruction
-        if (this.imeDelay) {
-            this.enableInterrupts();
-            this.imeDelay = false;
-        }
+        const pcBefore = this.registers.PC;
+        this.registers.lastPC = pcBefore;
 
+        // Handle interrupts first. This can consume cycles and change the PC.
         const interruptCycles = this.handleInterrupts();
         if (interruptCycles > 0) {
+            // An interrupt was handled. Update timer and exit immediately.
             this.timer.update(interruptCycles);
             return interruptCycles;
         }
 
-        const pcBefore = this.registers.PC;
-        this.registers.lastPC = pcBefore;
+        // If no interrupt, check for STOP/HALT modes or execute an instruction.
+        let elapsedClockTicks;
 
-        // console.log(`Before instruction: PC=0x${pcBefore.toString(16)}, A=0x${this.registers.A.toString(16)}, F=0x${this.registers.F.toString(16)}, IF=0x${this.IF.toString(16)}, IE=0x${this.IE.toString(16)}, IME=${this.interruptsEnabled}`);
-
-        if (this.haltEnabled) {
-            // return 4; // CPU is halted, burn 4 cycles and check for interrupts again next time.
-
-            const pendingInterrupts = (this.IF & this.IE & 0x1F) !== 0;
-            if (!pendingInterrupts) {
-                console.log(`CPU halted, no pending interrupts (IF=0x${this.IF.toString(16)}, IE=0x${this.IE.toString(16)})`);
-                this.timer.update(4);
-                return 4;
+        if (this.stopEnabled) {
+            // In STOP mode, CPU is paused but peripherals are not.
+            // Wake from STOP if any interrupt flag is set (e.g., by Joypad).
+            if ((this.IF & 0x1F) !== 0) {
+                this.stopEnabled = false;
             }
-            console.log("Resuming from HALT due to pending interrupt");
-            this.haltEnabled = false;
+            elapsedClockTicks = 4; // Burn 4 cycles
+        } else if (this.haltEnabled) {
+            // CPU is paused. handleInterrupts() already checked if it should wake.
+            // If we are here, it means we stay halted.
+            elapsedClockTicks = 4; // Burn 4 cycles
+        } else {
+            // --- Normal instruction execution ---
+            const opcode = this.memory[pcBefore];
+            const handler = this.opcodeHandlers[opcode];
+
+            if (handler) {
+                this.lastOpcodeHandlerName = handler.name.split(" ")[1]?.split("opcode")[1] || "UNKNOWN";
+                elapsedClockTicks = handler() || 4;
+            } else {
+                this.lastOpcodeHandlerName = "UNKNOWN";
+                console.warn(`Unimplemented opcode: 0x${opcode.toString(16)} at address 0x${this.registers.PC.toString(16)}`);
+                this.registers.PC++;
+                elapsedClockTicks = 4;
+            }
         }
 
-        if (!this.BIOSExecuted && this.BIOSLoaded && this.registers.PC >= 0x0100) {
-            // BIOS finished execution
-            console.log(`Unmapping BIOS at PC=0x${this.registers.PC.toString(16)}`);
-            
-            this.unmapBIOS(); // switch to cartridge ROM
-
-            this.BIOSExecuted = true;
-        }
-
-        const opcode = this.memory[pcBefore];
-        const handler = this.opcodeHandlers[opcode];
-
-        let elapsedClockTicks = 4; // Default cycles
-        if (handler) {
-            this.lastOpcodeHandlerName = handler.name.split(" ")[1].split("opcode")[1];
-
-            elapsedClockTicks = handler() || 4;
-        }
-        else {
-            this.lastOpcodeHandlerName = "UNKNOWN";
-            console.warn(`Unimplemented opcode: 0x${opcode.toString(16)} at address 0x${this.registers.PC.toString(16)}`);
-            this.registers.PC++; // Skip the unhandled opcode
-        }
-
+        // Handle HALT bug (PC is not incremented after instruction following HALT)
         if (this.haltBug) {
-            // The HALT bug causes the PC to not be incremented after the instruction following HALT.
-            // We emulate this by setting the PC back to what it was before the instruction ran.
-            console.log(`HALT bug: Re-executing instruction at PC=0x${pcBefore.toString(16)}, Opcode=0x${this.memory[pcBefore].toString(16)}, A=0x${this.registers.A.toString(16)}`);
+            console.log(`HALT bug: Re-executing instruction at PC=0x${pcBefore.toString(16)}, Opcode=0x${this.memory[pcBefore].toString(16)}`);
             this.registers.PC = pcBefore;
             this.haltBug = false;
         }
 
-        // The IME scheduled by EI should take effect after the next instruction
+        // Update timer after the step
+        this.timer.update(elapsedClockTicks);
+
+        // Handle interrupt master flag (IME) scheduling.
+        // This logic runs at the end of a step to correctly handle the 1-instruction delay of EI.
+        if (this.imeDelay) {
+            this.enableInterrupts();
+            this.imeDelay = false;
+        }
         if (this.imeScheduled) {
             this.imeDelay = true;
             this.imeScheduled = false;
         }
-
-        // Update timer after instruction execution
-        this.timer.update(elapsedClockTicks);
+        // Schedule the halt bug to be active for the *next* instruction step
+        if (this.haltBugScheduled) {
+            this.haltBug = true;
+            this.haltBugScheduled = false;
+        }
 
         return elapsedClockTicks;
     }
@@ -577,13 +576,8 @@ class GameBoyCPU {
 
         const fired = IF & IE & 0x1F; // Only check the 5 interrupt bits
 
-        if (!this.interruptsEnabled) {
-            if (this.haltEnabled && fired !== 0) {
-                // Wake from HALT but don't service interrupts when IME=0
-                this.haltEnabled = false;
-                console.log("HALT exit due to pending interrupt");
-            }
-            return 0;
+        if (fired === 0) {
+            return 0; // No pending and enabled interrupts
         }
 
         // console.log(`Interrupt check:
@@ -592,30 +586,33 @@ class GameBoyCPU {
         //     Fired=${fired.toString(2).padStart(8,'0')} (${fired.toString(16)})
         //     PC=0x${this.registers.PC.toString(16)}
         // `);
-        
-        if (fired === 0) {
-            return 0;
-        }
 
-        // An interrupt occurred, wake from HALT
-        this.haltEnabled = false;
+        // --- Service the highest-priority interrupt ---
 
         // Standard interrupt sequence (5 M-cycles):
         // M1: Opcode fetch (discarded)
         // M2: Push PCh
         // M3: Push PCl
         // M4-M5: Jump to vector
+        
+        // An interrupt is pending. If halted, we must wake up.
+        if (this.haltEnabled) {
+            this.haltEnabled = false;
+            // console.log("HALT exit due to pending interrupt");
+        }
 
-        // Push current PC to stack before handling interrupt
-        const returnAddr = this.registers.PC;
-        this.push((returnAddr >> 8) & 0xFF, returnAddr & 0xFF);
-        console.log(`Pushed return address 0x${returnAddr.toString(16)} to stack`);
+        // If master interrupt switch is disabled, we don't service the interrupt.
+        // The CPU just wakes up from HALT mode.
+        if (!this.interruptsEnabled) {
+            return 0;
+        }
 
         // Disable master interrupt flag
         this.interruptsEnabled = false;
-        console.log("Disabled interrupts for handler");
-
-        // An interrupt handling sequence takes 5 machine cycles (20 clock cycles).
+        
+        // Push current PC to stack before handling interrupt
+        const returnAddr = this.registers.PC;
+        this.push((returnAddr >> 8) & 0xFF, returnAddr & 0xFF);
         
         // Handle individual interrupts in priority order
         let handlerAddr = 0;
@@ -633,25 +630,22 @@ class GameBoyCPU {
         else if (fired & this.INT.TIMER) {
             this.IF &= ~this.INT.TIMER; // Clear Timer interrupt flag
             handlerAddr = 0x0050;
-
-            console.log("Timer interrupt handled, A=", this.registers.A.toString(16));
         }
         // Serial Interrupt (Piority 3)
         else if (fired & this.INT.SERIAL) {
-            this.IF &= ~this.INT.SERIAL; // Clear Serial interrupt flagº
+            this.IF &= ~this.INT.SERIAL; // Clear Serial interrupt flag
             handlerAddr = 0x0058;
         }
         // Joypad Interrupt (Priority 4)
         else if (fired & this.INT.JOYPAD) {
-            this.IF &= ~this.INT.JOYPAD; // Clear Joypad interrupt flag;
+            this.IF &= ~this.INT.JOYPAD; // Clear Joypad interrupt flag
             handlerAddr = 0x0060;
         }
 
-        console.log(`Jumping to interrupt handler at 0x${handlerAddr.toString(16)}`);
-        console.log(`Handler contains opcodes: ${Array.from(this.memory.slice(handlerAddr, handlerAddr + 4)).map(x => x.toString(16).padStart(2, '0')).join(' ')}`);
         this.registers.PC = handlerAddr;
 
-        return 20; // 5 M-cycles (20 T-cycles)
+        // Standard interrupt sequence takes 5 M-cycles (20 T-cycles)
+        return 20;
     }
 
     requestInterrupt(type) {
@@ -871,8 +865,9 @@ class GameBoyCPU {
     // Helper for POP opcodes
     pop() {
         const lowByte = this.memory[this.registers.SP];
-        const highByte = this.memory[this.registers.SP + 1];
-        this.registers.SP += 2;
+        this.registers.SP++; // Increment SP to point to the high byte
+        const highByte = this.memory[this.registers.SP];
+        this.registers.SP++; // Increment SP again
         return (highByte << 8) | lowByte;
     }
 
@@ -1210,7 +1205,8 @@ class GameBoyCPU {
         this.stopEnabled = true;
         console.log("STOP instruction executed");
 
-        this.registers.PC++;
+        // this.timer.resetDiv();
+        this.registers.PC += 2;
         return 4;
     }
 
@@ -1247,7 +1243,9 @@ class GameBoyCPU {
 
     opcodeJR_NZ_n() { // 0x20: JR NZ, n
         // Jump to the address PC + n if the Zero flag is not set.
+        const zFlag = (this.registers.F & 0x80) !== 0;
         const n = this.memory[this.registers.PC + 1]; // Fetch the signed offset n
+        console.log(`JR NZ at PC=0x${this.registers.PC.toString(16)}, Z=${zFlag}, B=0x${this.registers.B.toString(16)}, offset=${n}, F=0x${this.registers.F.toString(16)}, IF=0x${this.IF.toString(16)}, IE=0x${this.IE.toString(16)}`);
         if ((this.registers.F & 0x80) === 0) { // Check if Z flag is not set
             this.registers.PC += signedValue(n) + 2; // Jump by the offset and advance PC
             return 12;
@@ -1373,33 +1371,36 @@ class GameBoyCPU {
 
     opcodeDAA() { // 0x27: DAA (Decimal Adjust Accumulator)
         let a = this.registers.A;
-        const n_flag = (this.registers.F & 0x40) !== 0;
-        const h_flag = (this.registers.F & 0x20) !== 0;
-        let c_flag = (this.registers.F & 0x10) !== 0;
+        let correction = 0;
+        let carry = (this.registers.F & 0x10) !== 0;
 
-        if (!n_flag) { // After addition
-            if (c_flag || a > 0x99) {
-                a += 0x60;
-                c_flag = true;
+        if (!(this.registers.F & 0x40)) { // N flag is not set (addition)
+            if (carry || (a > 0x99)) {
+                correction = 0x60;
+                carry = true;
             }
-            if (h_flag || (a & 0x0F) > 0x09){
-                a += 0x06;
+            if ((this.registers.F & 0x20) || ((a & 0x0F) > 0x09)) {
+                correction |= 0x06;
             }
+            a += correction;
         }
-        else { // After subtraction
-            if (c_flag)
-                a -= 0x60;
-            if (h_flag)
-                a -= 0x06;
+        else { // N flag is set (subtraction)
+            if (carry) {
+                correction = 0x60;
+            }
+            if (this.registers.F & 0x20) {
+                correction |= 0x06;
+            }
+            a -= correction;
         }
 
-        this.registers.A = a;
+        this.registers.A = a & 0xFF;
 
         // Update flags
         this.setZeroFlag(this.registers.A);
         this.registers.F &= ~0x20; // H flag is always cleared
 
-        if (c_flag)
+        if (carry)
             this.registers.F |= 0x10;
         else
             this.registers.F &= ~0x10;
@@ -1410,6 +1411,7 @@ class GameBoyCPU {
 
     opcodeJR_Z_n() { // 0x28: JR Z, n
         // Jump to the address PC + n if the Zero flag is set.
+        // console.log(`JR Z, n at PC=0x${this.registers.PC.toString(16)}, Z=${(this.registers.F & 0x80) !== 0}, branching=${(this.registers.F & 0x80) !== 0}`);
         const n = this.memory[this.registers.PC + 1]; // Fetch the signed offset n
         if ((this.registers.F & 0x80) !== 0) { // Check if Z flag is set
             this.registers.PC += signedValue(n) + 2; // Jump by the offset and advance PC
@@ -1431,8 +1433,8 @@ class GameBoyCPU {
 
     opcodeJR_NC_n() { // 0x30: JR NC, n
         // Jump relative by n if Carry flag is not set.
+        // console.log(`JR NC, c at PC=0x${this.registers.PC.toString(16)}, Z=${(this.registers.F & 0x80) !== 0}, branching=${(this.registers.F & 0x10) === 0}`);
         const n = this.memory[this.registers.PC + 1]; // Fetch the signed offset n
-        
         if ((this.registers.F & 0x10) === 0) { // Check if Carry flag is NOT set
             this.registers.PC += signedValue(n) + 2; // Jump by the offset
             return 12; // Cycles for jump taken
@@ -1445,6 +1447,7 @@ class GameBoyCPU {
 
     opcodeJR_C_n() { // 0x38: JR C, n
         // Jump relative by n if Carry flag is set.
+        // console.log(`JR C, n at PC=0x${this.registers.PC.toString(16)}, Z=${(this.registers.F & 0x80) !== 0}, branching=${(this.registers.F & 0x10) !== 0}`);
         const n = this.memory[this.registers.PC + 1];
         if ((this.registers.F & 0x10) !== 0) {
             this.registers.PC += signedValue(n) + 2;
@@ -1842,7 +1845,8 @@ class GameBoyCPU {
         if (!this.interruptsEnabled && pendingInterrupts) {
             // HALT bug occurs when interrupts are disabled but there's a pending interrupt
             console.log("HALT bug triggered: Will re-execute next instruction");
-            this.haltBug = true;
+            // this.haltBug = true;
+            this.haltBugScheduled = true;
         }
         else {
             console.log("Entering HALT state");
@@ -2155,6 +2159,7 @@ class GameBoyCPU {
     }
 
     opcodeJP_NZ_nn() { // 0xC2: JP NZ, nn
+        // console.log(`JP NZ, nn at PC=0x${this.registers.PC.toString(16)}, Z=${(this.registers.F & 0x80) !== 0}, branching=${(this.registers.F & 0x80) === 0}`);
         // Jump to address nn if Zero flag is not set.
         if ((this.registers.F & 0x80) === 0) {
             const lowByte = this.memory[this.registers.PC + 1];
@@ -2188,6 +2193,7 @@ class GameBoyCPU {
     }
 
     opcodeJP_Z_nn() { // 0xCA: JP Z, nn
+        // console.log(`JP Z, nn at PC=0x${this.registers.PC.toString(16)}, Z=${(this.registers.F & 0x80) !== 0}, branching=${(this.registers.F & 0x80) !== 0}`);
         // Jumps to a 16-bit address if the Zero flag is set.
         if ((this.registers.F & 0x80) !== 0) {
             const lowByte = this.memory[this.registers.PC + 1];
@@ -2342,9 +2348,7 @@ class GameBoyCPU {
             const address = (highByte << 8) | lowByte;
 
             const returnAddress = this.registers.PC + 3;
-            this.registers.SP -= 2;
-            this.writeMemory(this.registers.SP, returnAddress & 0xFF);
-            this.writeMemory(this.registers.SP + 1, (returnAddress >> 8) & 0xFF);
+            this.push((returnAddress >> 8) & 0xFF, returnAddress & 0xFF);
 
             this.registers.PC = address;
             return 24; // Call taken
@@ -2371,9 +2375,7 @@ class GameBoyCPU {
 
             // Push the current PC + 3 (next instruction) onto the stack
             const returnAddress = this.registers.PC + 3;
-            this.registers.SP -= 2; // Decrement SP by 2 to reserve space
-            this.writeMemory(this.registers.SP, returnAddress & 0xFF);            // Store lower byte of PC
-            this.writeMemory(this.registers.SP + 1, (returnAddress >> 8) & 0xFF); // Store higher byte of PC
+            this.push((returnAddress >> 8) & 0xFF, returnAddress & 0xFF);
 
             this.registers.PC = address; // Jump to the subroutine
             return 24; // Call taken
@@ -2392,9 +2394,7 @@ class GameBoyCPU {
 
         // Push the address of the next instruction (PC + 3) onto the stack
         const returnAddress = this.registers.PC + 3;
-        this.registers.SP -= 2;
-        this.writeMemory(this.registers.SP, returnAddress & 0xFF);            // Low byte
-        this.writeMemory(this.registers.SP + 1, (returnAddress >> 8) & 0xFF); // High byte
+        this.push((returnAddress >> 8) & 0xFF, returnAddress & 0xFF);
 
         this.registers.PC = address;
         return 24;
@@ -2468,9 +2468,7 @@ class GameBoyCPU {
             const address = (highByte << 8) | lowByte;
 
             const returnAddress = this.registers.PC + 3;
-            this.registers.SP -= 2;
-            this.writeMemory(this.registers.SP, returnAddress & 0xFF);
-            this.writeMemory(this.registers.SP + 1, (returnAddress >> 8) & 0xFF);
+            this.push((returnAddress >> 8) & 0xFF, returnAddress & 0xFF);
 
             this.registers.PC = address;
             return 24; // Call taken
@@ -2490,9 +2488,7 @@ class GameBoyCPU {
     
             // Push the current PC + 3 (next instruction) onto the stack
             const returnAddress = this.registers.PC + 3;
-            this.registers.SP -= 2; // Decrement SP by 2 to reserve space
-            this.writeMemory(this.registers.SP, returnAddress & 0xFF);            // Store lower byte of PC
-            this.writeMemory(this.registers.SP + 1, (returnAddress >> 8) & 0xFF); // Store higher byte of PC
+            this.push((returnAddress >> 8) & 0xFF, returnAddress & 0xFF);
     
             this.registers.PC = address; // Jump to the subroutine
             return 24; // Call taken
@@ -2614,6 +2610,7 @@ class GameBoyCPU {
     opcodeDI() { // 0xF3: DI - Disable interrupts
         this.disableInterrupts();
         this.imeScheduled = false; // DI also cancels a pending EI
+        this.imeDelay = false;     // DI must also cancel a scheduled-but-not-yet-active EI
         this.registers.PC++;
         return 4;
     }
@@ -2692,7 +2689,11 @@ class GameBoyCPU {
         // Compare the value in A with the immediate value n.
         // This is a subtraction (A - n) without storing the result.
         const n = this.memory[this.registers.PC + 1];
+        console.log(`CP A, ${n}, A=0x${this.registers.A.toString(16)}, B=0x${this.registers.B.toString(16)}, F=0x${this.registers.F.toString(16)}, IF=0x${this.IF.toString(16)}, IE=0x${this.IE.toString(16)} before`);
+
         this.cp(n);
+        console.log(`After CP A, ${n}, F=0x${this.registers.F.toString(16)}, Z=${(this.registers.F & 0x80) !== 0}`);
+
         this.registers.PC += 2; // Advance PC by 2
         return 8;
     }

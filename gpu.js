@@ -41,7 +41,7 @@ class GameBoyGPU {
         switch (this.mode) {
             case GPU_MODES.HBLANK: // HBlank
                 if (this.modeClock >= 204) {
-                    this.modeClock = 0;
+                    this.modeClock -= 204;
                     this.line++;
                     this.memory[0xFF44] = this.line; // Update LY register
                     if (this.line === 144) {
@@ -57,7 +57,7 @@ class GameBoyGPU {
                 break;
             case GPU_MODES.VBLANK: // VBlank
                 if (this.modeClock >= 456) {
-                    this.modeClock = 0;
+                    this.modeClock -= 456;
                     this.line++;
                     this.memory[0xFF44] = this.line; // Update LY register
                     if (this.line > 153) {
@@ -69,13 +69,13 @@ class GameBoyGPU {
                 break;
             case GPU_MODES.OAM_SEARCH: // OAM search
                 if (this.modeClock >= 80) {
-                    this.modeClock = 0;
+                    this.modeClock -= 80;
                     this.mode = GPU_MODES.DRAWING; // Enter drawing pixels
                 }
                 break;
             case GPU_MODES.DRAWING: // Drawing pixels
                 if (this.modeClock >= 172) {
-                    this.modeClock = 0;
+                    this.modeClock -= 172;
                     this.mode = GPU_MODES.HBLANK; // Enter HBlank
                     this.drawScanline();
                 }

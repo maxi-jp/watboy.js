@@ -104,6 +104,9 @@ function Loop() {
     if (deltaTime > 1)
         return;
 
+    if (Input.IsKeyDown(KEY_S))
+        debug = !debug;
+
     if (!debug) {
         // Game logic ---------
         Update(deltaTime);
