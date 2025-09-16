@@ -1,8 +1,8 @@
 // key events
 var lastPress = null;
 
-const KEY_LEFT   = 37, KEY_A = 65;
-const KEY_UP     = 38, KEY_W = 87;
+const KEY_LEFT   = 37, KEY_A = 65, KEY_B = 83;
+const KEY_UP     = 38, KEY_W = 87, KEY_Z = 226;
 const KEY_RIGHT  = 39, KEY_D = 68;
 const KEY_DOWN   = 40, KEY_S = 83;
 const KEY_PAUSE  = 19; KEY_Q = 81;
@@ -10,6 +10,7 @@ const KEY_SPACE  = 32; KEY_E = 69;
 const KEY_ESCAPE = 27; KEY_F = 70;
 const KEY_LSHIFT = 16;
 const KEY_LCTRL  = 17;
+const KEY_ENTER  = 13;
 
 const KEY_0 = 48;
 const KEY_1 = 49;
@@ -77,7 +78,7 @@ var Input = {
 function SetupKeyboardEvents ()
 {
     AddEvent(document, "keydown", function (e) {
-        //console.log(e.keyCode);
+        // console.log(e.keyCode);
         // avoid when the key is being held down such that it is automatically repeating
         if (!e.repeat) {
             Input.keyboard.keydown[e.keyCode] = true;
