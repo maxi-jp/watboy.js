@@ -82,6 +82,7 @@ class GameBoyCPU {
         this.imeDelay = false;
         this.haltBug = false;
         this.haltBugScheduled = false;
+        this.dmaCycles = 0;
 
         this.INT = {
             VBLANK: 0x01,
@@ -181,6 +182,7 @@ class GameBoyCPU {
             0x5E: this.opcodeLD_E_HL.bind(this),
             0x5F: this.opcodeLD_E_A.bind(this),
             0x60: this.opcodeLD_H_B.bind(this),
+            0x61: this.opcodeLD_H_C.bind(this),
             0x62: this.opcodeLD_H_D.bind(this),
             0x66: this.opcodeLD_H_HL.bind(this),
             0x67: this.opcodeLD_H_A.bind(this),
@@ -224,6 +226,7 @@ class GameBoyCPU {
             0xA0: this.opcodeAND_B.bind(this),
             0xA1: this.opcodeAND_C.bind(this),
             0xA7: this.opcodeAND_A.bind(this),
+            0xA8: this.opcodeXOR_B.bind(this),
             0xA9: this.opcodeXOR_C.bind(this),
             0xAD: this.opcodeXOR_L.bind(this),
             0xAE: this.opcodeXOR_HL.bind(this),
@@ -384,6 +387,12 @@ class GameBoyCPU {
             return;
         }
 
+        // Writing to DMA register (0xFF46) triggers a DMA transfer
+        if (address === 0xFF46) {
+            this.doDMATransfer(value);
+            return;
+        }
+
         // Handle writes to P1 (Joypad) register (0xFF00)
         if (address === 0xFF00) {
             // Only bits 4 and 5 (button selection) are writable by the game.
@@ -514,6 +523,13 @@ class GameBoyCPU {
     }
 
     runStep() {
+        // Handle OAM DMA transfer stall
+        if (this.dmaCycles > 0) {
+            // The CPU is stalled, but other hardware (Timer, GPU) continues.
+            this.dmaCycles -= 4;
+            return 4; // Burn 4 T-cycles
+        }
+
         // Schedule the halt bug to be active for the *next* instruction step.
         // This ensures the bug affects the instruction *after* HALT.
         if (this.haltBugScheduled) {
@@ -687,6 +703,22 @@ class GameBoyCPU {
 
     disableInterrupts() {
         this.interruptsEnabled = false;
+    }
+
+    signedValue(n) {
+        // Helper function to interpret an 8-bit value as signed
+        return n < 0x80 ? n : n - 0x100;
+    }
+
+    doDMATransfer(value) {
+        this.memory[0xFF46] = value;
+        const sourceAddress = value << 8;
+        // The transfer copies 160 bytes from source to OAM (0xFE00 - 0xFE9F)
+        for (let i = 0; i < 0xA0; i++) {
+            this.memory[0xFE00 + i] = this.readMemory(sourceAddress + i);
+        }
+        // The DMA transfer stalls the CPU for 160 machine cycles (640 T-cycles)
+        this.dmaCycles = 640;
     }
 
 // #region flags update helper functions
@@ -1275,7 +1307,7 @@ class GameBoyCPU {
     opcodeJR_n() { // 0x18: JR n
         // Unconditional relative jump by n.
         const n = this.readMemory(this.registers.PC + 1); // Fetch the signed offset n
-        this.registers.PC += signedValue(n) + 2; // Jump by the offset
+        this.registers.PC += this.signedValue(n) + 2; // Jump by the offset
         this.lastInstructionSize = 2;
         return 12;
     }
@@ -1307,7 +1339,7 @@ class GameBoyCPU {
         const n = this.readMemory(this.registers.PC + 1); // Fetch the signed offset n
         this.lastInstructionSize = 2;
         if ((this.registers.F & 0x80) === 0) { // Check if Z flag is not set
-            this.registers.PC += signedValue(n) + 2; // Jump by the offset and advance PC
+            this.registers.PC += this.signedValue(n) + 2; // Jump by the offset and advance PC
             return 12;
         }
         return 8;
@@ -1467,7 +1499,7 @@ class GameBoyCPU {
         this.lastInstructionSize = 2;
         const n = this.readMemory(this.registers.PC + 1); // Fetch the signed offset n
         if ((this.registers.F & 0x80) !== 0) { // Check if Z flag is set
-            this.registers.PC += signedValue(n) + 2; // Jump by the offset and advance PC
+            this.registers.PC += this.signedValue(n) + 2; // Jump by the offset and advance PC
             return 12;
         }
         return 8;
@@ -1487,7 +1519,7 @@ class GameBoyCPU {
         this.lastInstructionSize = 2;
         const n = this.readMemory(this.registers.PC + 1); // Fetch the signed offset n
         if ((this.registers.F & 0x10) === 0) { // Check if Carry flag is NOT set
-            this.registers.PC += signedValue(n) + 2; // Jump by the offset
+            this.registers.PC += this.signedValue(n) + 2; // Jump by the offset
             return 12;
         }
         return 8;
@@ -1499,7 +1531,7 @@ class GameBoyCPU {
         this.lastInstructionSize = 2;
         const n = this.readMemory(this.registers.PC + 1);
         if ((this.registers.F & 0x10) !== 0) {
-            this.registers.PC += signedValue(n) + 2;
+            this.registers.PC += this.signedValue(n) + 2;
             return 12;
         }
         return 8;
@@ -1832,6 +1864,14 @@ class GameBoyCPU {
     opcodeLD_H_B() { // 0x60: LD H, B
         // Load the value of register B into register H.
         this.registers.H = this.registers.B;
+
+        this.lastInstructionSize = 1;
+        return 4;
+    }
+
+    opcodeLD_H_C() { // 0x61: LD H, C
+        // Load the value of register C into register H.
+        this.registers.H = this.registers.C;
 
         this.lastInstructionSize = 1;
         return 4;
@@ -2182,6 +2222,45 @@ class GameBoyCPU {
         return 4;
     }
 
+    opcodeXOR_B() { // 0xA8: XOR B
+        // Bitwise XOR A with B.
+        this.xor(this.registers.B);
+
+        this.lastInstructionSize = 1;
+        return 4;
+    }
+
+    opcodeXOR_C() { // 0xA9: XOR C
+        this.xor(this.registers.C);
+
+        this.lastInstructionSize = 1;
+        return 4;
+    }
+
+    opcodeXOR_L() { // 0xAD: XOR L
+        this.xor(this.registers.L);
+
+        this.lastInstructionSize = 1;
+        return 4;
+    }
+
+    opcodeXOR_HL() { // 0xAE: XOR (HL)
+        // Performs a bitwise XOR between A and the byte at the memory address in HL.
+        const value = this.readMemory(this.registers.HL);
+        this.xor(value);
+
+        this.lastInstructionSize = 1;
+        return 8;
+    }
+
+    opcodeXOR_A_A() { // 0xAF: XOR A, A
+        // Exclusive OR the A register with itself.
+        this.xor(this.registers.A);
+
+        this.lastInstructionSize = 1;
+        return 4;
+    }
+
     opcodeOR_B() { // 0xB0: OR B
         // Performs a bitwise OR between register A and register B.
         this.or(this.registers.B);
@@ -2289,37 +2368,6 @@ class GameBoyCPU {
     opcodeCP_A() { // 0xBF: CP A
         // Compare A with itself.
         this.cp(this.registers.A);
-
-        this.lastInstructionSize = 1;
-        return 4;
-    }
-
-    opcodeXOR_C() { // 0xA9: XOR C
-        this.xor(this.registers.C);
-
-        this.lastInstructionSize = 1;
-        return 4;
-    }
-
-    opcodeXOR_L() { // 0xAD: XOR L
-        this.xor(this.registers.L);
-
-        this.lastInstructionSize = 1;
-        return 4;
-    }
-
-    opcodeXOR_HL() { // 0xAE: XOR (HL)
-        // Performs a bitwise XOR between A and the byte at the memory address in HL.
-        const value = this.readMemory(this.registers.HL);
-        this.xor(value);
-
-        this.lastInstructionSize = 1;
-        return 8;
-    }
-
-    opcodeXOR_A_A() { // 0xAF: XOR A, A
-        // Exclusive OR the A register with itself.
-        this.xor(this.registers.A);
 
         this.lastInstructionSize = 1;
         return 4;
@@ -2732,7 +2780,7 @@ class GameBoyCPU {
     opcodeADD_SP_n() { // 0xE8: ADD SP, n
         // Add signed immediate 8-bit value n to SP.
         const n_unsigned = this.readMemory(this.registers.PC + 1);
-        const n_signed = signedValue(n_unsigned);
+        const n_signed = this.signedValue(n_unsigned);
         const sp = this.registers.SP;
 
         const result = sp + n_signed;
@@ -2855,7 +2903,7 @@ class GameBoyCPU {
     opcodeLD_HL_SP_plus_n() { // 0xF8: LD HL, SP+n
         // Adds a signed immediate 8-bit value n to SP and stores the result in HL.
         const n_unsigned = this.readMemory(this.registers.PC + 1);
-        const n_signed = signedValue(n_unsigned);
+        const n_signed = this.signedValue(n_unsigned);
         const sp = this.registers.SP;
 
         const result = sp + n_signed;

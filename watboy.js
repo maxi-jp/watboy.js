@@ -224,11 +224,6 @@ function updateDebugData() {
     debugData.lastInstruction.innerText = newOpcode;
 }
 
-// Helper function to interpret an 8-bit value as signed
-function signedValue(n) {
-    return n < 0x80 ? n : n - 0x100;
-}
-
 const cartridgeHeaderAdress = [0x100, 0x14F];
 const cartridgeNLogoAdress = [0x104, 0x133];
 const cartridgeNameAdress = [0x134 , 0x143];
