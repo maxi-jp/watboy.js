@@ -16,9 +16,25 @@ canvas {
     image-rendering: pixelated;
 }
 
-#cpu {
+#controls {
+    float: left;
     text-align: left;
     margin-left: 20px;
+    margin-top: 20px;
+    width: calc(50% - 20px);
+}
+
+#controls ul {
+    padding-left: 20px;
+}
+
+#cpu {
+    float: right;
+    text-align: left;
+    margin-left: 20px;
+    margin-top: 20px;
+    font-size: 13px;
+    width: calc(50% - 20px);
 }
 
 #cpu ul {

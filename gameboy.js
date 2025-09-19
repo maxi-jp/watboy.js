@@ -32,20 +32,8 @@ class GameBoy {
             const cycles = this.cpu.runStep();
             cyclesThisFrame += cycles;
 
-            // In STOP mode, the timer and GPU are paused.
-            // The CPU will burn cycles until a joypad press wakes it up.
-            if (!this.cpu.stopEnabled) {
-                this.timer.update(cycles);
-                this.gpu.update(cycles);
-            }
-            else {
-                // While in STOP mode, a joypad press will set an interrupt flag.
-                // This doesn't service the interrupt, but it does wake the CPU.
-                // We need to check for this condition to exit the STOP state.
-                if ((this.cpu.IF & this.cpu.INT.JOYPAD) !== 0) {
-                    this.cpu.stopEnabled = false;
-                }
-            }
+            this.timer.update(cycles);
+            this.gpu.update(cycles);
             this.joypad.update();
         }
     }

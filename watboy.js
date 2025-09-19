@@ -113,7 +113,7 @@ function Loop() {
         // Draw the game ------
         Draw(ctx);
     }
-    else if (Input.IsKeyDown(KEY_SPACE) || Input.IsKeyPressed(KEY_A)) {
+    else if (Input.IsKeyDown(KEY_D)) {
         // Game logic ---------
         Update(deltaTime);
         

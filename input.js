@@ -2,7 +2,7 @@
 var lastPress = null;
 
 const KEY_LEFT   = 37, KEY_A = 65, KEY_B = 83;
-const KEY_UP     = 38, KEY_W = 87, KEY_Z = 226;
+const KEY_UP     = 38, KEY_W = 87, KEY_Z = 90;
 const KEY_RIGHT  = 39, KEY_D = 68;
 const KEY_DOWN   = 40, KEY_S = 83;
 const KEY_PAUSE  = 19; KEY_Q = 81;
