@@ -7,6 +7,7 @@ var canvas = /** @type {HTMLCanvasElement} */(null);
 var ctx = /** @type {CanvasRenderingContext2D} */(null);
 
 var debug = true;
+var showFPS = true;
 
 var romInput = null;
 
@@ -55,6 +56,20 @@ function Init() {
         debugData.flags[prop] = document.getElementById(`flags_${prop}`);
     }
     debugData.lastInstruction = document.getElementById('last_inst');
+
+    // options
+    document.getElementById("showFPS").addEventListener("change", (evt) => {
+        showFPS = evt.target.checked;
+    });
+
+    // color palettes inputs
+    const rad = document.getElementsByName("pallete");
+    rad.forEach((element) => {
+        element.addEventListener('change', (ev) => {
+            const paletteId = parseInt(ev.target.id.split("palette")[1]);
+            gameboy.SetColorPallete(paletteId - 1);
+        });
+    });
 
     // input setup
     SetupKeyboardEvents();
@@ -135,7 +150,8 @@ function Draw(/** @type {CanvasRenderingContext2D} */ctx) {
 
     gameboy.GPURender();
 
-    DrawStats(ctx);
+    if(showFPS)
+        DrawStats(ctx);
 }
 
 function DrawStats(ctx) {

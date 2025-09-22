@@ -45,4 +45,8 @@ class GameBoy {
     GPURender() {
         this.gpu.drawFrame();
     }
+
+    SetColorPallete(id) {
+        this.gpu.SetColorPallete(id);
+    }
 }

@@ -24,6 +24,15 @@ class GameBoyGPU {
         this.modeClock = 0;
         this.line = 0;
         this.windowLineCounter = 0;
+
+        this.colorPalets = [
+            [[255, 255, 255], [192, 192, 192], [96, 96, 96], [0, 0, 0]], // Classic Game Boy shades: White, Light Gray, Dark Gray, Black
+            [[127, 134, 15], [87, 124, 68], [54, 93, 72], [42, 69, 59]], // DMG-01
+            [[250, 251, 246], [198, 183, 190], [86, 90, 117], [15, 15, 27]], // https://lospec.com/palette-list/hollow
+            [[230, 214, 156], [180, 165, 106], [123, 113, 98], [57, 56, 41]], // https://lospec.com/palette-list/muddysand
+            [[139, 229, 255], [96, 143, 207], [117, 80, 232], [98, 46, 76]], // https://lospec.com/palette-list/muddysand
+        ];
+        this.currentPalet = this.colorPalets[0];
     }
 
     update(cycles) {
@@ -302,18 +311,15 @@ class GameBoyGPU {
     }
 
     renderAsImageData() {
-        // Classic Game Boy shades: White, Light Gray, Dark Gray, Black
-        const shades = [255, 192, 96, 0];
-
         for (let i = 0; i < this.frameBuffer.length; i++) {
             const shadeIndex = this.frameBuffer[i]; // This is 0, 1, 2, or 3
-            const color = shades[shadeIndex];
+            const color = this.currentPalet[shadeIndex];
 
             const pixelIndex = i * 4;
     
-            this.imageData.data[pixelIndex] = color;     // Red
-            this.imageData.data[pixelIndex + 1] = color; // Green
-            this.imageData.data[pixelIndex + 2] = color; // Blue
+            this.imageData.data[pixelIndex] = color[0];     // Red
+            this.imageData.data[pixelIndex + 1] = color[1]; // Green
+            this.imageData.data[pixelIndex + 2] = color[2]; // Blue
             this.imageData.data[pixelIndex + 3] = 255;   // Alpha (fully opaque)
         }
     
@@ -324,7 +330,7 @@ class GameBoyGPU {
     renderAsRects() {
         for (let i = 0; i < this.screenWidth * this.screenHeight; i++) {
             const colorIndex = this.frameBuffer[i];
-            const color = this.getColorFromIndex(colorIndex);
+            const color = this.currentPalet[colorIndex];
             const x = i % this.screenWidth;
             const y = Math.floor(i / this.screenWidth);
             this.ctx.fillStyle = color;
@@ -332,10 +338,7 @@ class GameBoyGPU {
         }
     }
 
-    getColorFromIndex(index) {
-        const colors = [
-            "#FFFFFF", "#C0C0C0", "#808080", "#000000"
-        ];
-        return colors[index];
+    SetColorPallete(id) {
+        this.currentPalet = this.colorPalets[id];
     }
 }
