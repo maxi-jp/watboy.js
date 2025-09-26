@@ -9,6 +9,8 @@ class GameBoyCPU {
     constructor(timer) {
         this.timer = timer;
 
+        this.strictMode = false; // if true: only wake from STOP on Joypad interrupt
+
         // Private storage for 8-bit registers
         const _r = {
             A: 0, B: 0, C: 0, D: 0, E: 0, F: 0, H: 0, L: 0, 
@@ -22,7 +24,7 @@ class GameBoyCPU {
             get C() { return _r.C; }, set C(v) { _r.C = v & 0xFF; },
             get D() { return _r.D; }, set D(v) { _r.D = v & 0xFF; },
             get E() { return _r.E; }, set E(v) { _r.E = v & 0xFF; },
-            get F() { return _r.F; }, set F(v) { _r.F = v & 0xF0; }, // Lower 4 bits of F are always 0
+            get F() { return _r.F; }, set F(v) { _r.F = v & 0xF0; }, // Lower 4 bits of F are always 0, except for POP AF
             get H() { return _r.H; }, set H(v) { _r.H = v & 0xFF; },
             get L() { return _r.L; }, set L(v) { _r.L = v & 0xFF; },
 
@@ -34,7 +36,10 @@ class GameBoyCPU {
             get SP() { return _r.SP; }, set SP(v) { _r.SP = v & 0xFFFF; },
             get PC() { return _r.PC; }, set PC(v) { _r.PC = v & 0xFFFF; },
 
-            lastPC: 0 // copy of the last PC
+            lastPC: 0, // copy of the last PC
+
+            // Special setter for POP AF to bypass the masking
+            setF_pop(v) { _r.F = v & 0xFF; }
         };
 
         // Flags map -------------
@@ -409,6 +414,12 @@ class GameBoyCPU {
     }
 
     writeMemory(address, value) {
+        if (address === 0xD65C) {
+            console.log(`Write to 0xD65C: value=0x${value.toString(16)}, PC=0x${this.registers.PC.toString(16)}, opcode=0x${this.readMemory(this.registers.PC).toString(16)}, SP=0x${this.registers.SP.toString(16)}`);
+        }
+        if (address === 0xF65C) {
+            console.log(`Write to 0xF65C: value=0x${value.toString(16)}, PC=0x${this.registers.PC.toString(16)}, opcode=0x${this.readMemory(this.registers.PC).toString(16)}, SP=0x${this.registers.SP.toString(16)}`);
+        }
         // ROM area (0x0000-0x7FFF). Writes to this area are either ignored
         // or used for MBC bank switching.
         if (address < 0x8000) {
@@ -429,6 +440,7 @@ class GameBoyCPU {
         // Writing to the DIV register (0xFF04) resets its internal counter to 0 (the value written is ignored).
         if (address === 0xFF04) {
             this.timer.resetDiv();
+            this.stopEnabled = false;
             return;
         }
 
@@ -465,6 +477,9 @@ class GameBoyCPU {
             this.serialBuffer += char;
             if (char === '\n' || char === '\r' || this.serialBuffer.endsWith("ok")) {
                 console.log("SERIAL:", this.serialBuffer.trim());
+                if (this.serialBuffer.trim().endsWith("Passed all tests")) {
+                    console.log(`IE=0x${this.memory[0xFFFF].toString(16)}, IF=0x${this.memory[0xFF0F].toString(16)}`)
+                }
                 this.serialBuffer = "";
             }
 
@@ -479,6 +494,17 @@ class GameBoyCPU {
     }
 
     readMemory(address) {
+        if (address === 0xD65C) {
+            console.log(`Read from 0xD65C: value=0x${this.memory[address].toString(16)}, PC=0x${this.registers.PC.toString(16)}`);
+        }
+        // ROM area read (delegated to MBC)
+        if (address < 0x8000) {
+            if (this.MBC) {
+                return this.MBC.readRom(address);
+            }
+            return this.memory[address]; // Fallback for no MBC (or BIOS)
+        }
+
         // External RAM read
         if (address >= 0xA000 && address < 0xC000) {
             if (this.MBC) {
@@ -514,7 +540,7 @@ class GameBoyCPU {
     }
 
     loadROM(romData) {
-        console.log("ROM size: " + romData.length);
+        console.log(`ROM size: ${romData.length} bytes (0x${romData.length.toString(16)})`);
 
         if (romData.length < 0x0100) {
             console.error("Invalid ROM size (too small).");
@@ -531,24 +557,27 @@ class GameBoyCPU {
         const mbcType = romData[0x0147];
         console.log("Cartridge ROM type: 0x" + mbcType.toString(16));
 
-        // Load bank 0 (fixed)
-        for (let i = 0; i < 0x4000; i++) {
-            this.memory[i] = romData[i];
-        }
-
         if (mbcType >= 1 && mbcType <= 3) {
             this.MBC = new MBC1(this, romData);
-            this.MBC.switchRomBank(); // Load initial bank 1
+
+            // Load bank 0 (fixed)
+            // for (let i = 0; i < 0x4000; i++) {
+            //     this.memory[i] = romData[i];
+            // }
+
+            // this.MBC.switchRomBank(); // Load initial bank 1
         }
         else {
             // ROM_ONLY, load second 16KB bank if it exists
-            if (romData.length >= 0x8000) {
-                for (let i = 0; i < 0x4000; i++) {
-                    this.memory[0x4000 + i] = romData[0x4000 + i];
-                }
-            }
+            // Load the first 32KB directly into memory.
+            console.warn("Untested cartridge ROM type: 0x" + mbcType.toString(16));
+            const loadSize = Math.min(romData.length, 0x8000);
+            this.memory.set(romData.slice(0, loadSize));
             this.MBC = null;
         }
+        
+        console.log(`this.readMemory(0x6f2)==${this.readMemory(0x6f2).toString(16)}`);
+        console.log(`this.readMemory(0xd65c)==${this.readMemory(0xd65c).toString(16)}`);
     }
 
     start() {
@@ -613,19 +642,30 @@ class GameBoyCPU {
             // In STOP mode, the CPU is halted. An interrupt wakes it up.
             // On DMG, only a joypad press should wake it. For compatibility with test ROMs
             // that may not be DMG-specific, we'll wake on any pending interrupt flag.
-            if ((this.IF & 0x1F) !== 0) {
+            if ((!this.strictMode && (this.IF & this.IE & 0x1F) !== 0) || ((this.IF & this.IE & this.INT.JOYPAD) !== 0)) {
                 this.stopEnabled = false;
             }
+            
             elapsedClockTicks = 4; // Burn 4 cycles
         }
         else if (this.haltEnabled) {
-            // CPU is paused. handleInterrupts() already checked if it should wake.
-            // If we are here, it means we stay halted.
-            elapsedClockTicks = 4; // Burn 4 cycles
+                // CPU is paused. handleInterrupts() already checked if it should wake.
+                // If we are here, it means we stay halted.
+                
+                // Only wake from HALT if any interrupt is pending
+                if ((this.IF & this.IE & 0x1F) !== 0) {
+                    this.haltEnabled = false;
+                }
+                // else {
+                //     // Freeze emulation: signal to main loop to stop
+                //     this.haltedForever = true;
+                // }
+
+                elapsedClockTicks = 4; // Burn 4 cycles
         }
         else {
             // --- Normal instruction execution ---
-            const opcode = this.memory[pcBefore];
+            const opcode = this.readMemory(pcBefore);
             const handler = this.opcodeHandlers[opcode];
             this.lastInstructionSize = 1; // Default size for 1-byte opcodes
 
@@ -914,9 +954,9 @@ class GameBoyCPU {
         let f = 0x40; // N is 1
         if (this.registers.A === 0)
             f |= 0x80; // Z
-        if ((originalA & 0xF) < (value & 0xF))
+        if ((originalA & 0x0F) < (value & 0x0F))
             f |= 0x20; // H
-        if (result < 0)
+        if (originalA < value)
             f |= 0x10; // C
 
         this.registers.F = f;
@@ -943,9 +983,9 @@ class GameBoyCPU {
         let f = 0x40; // N is 1
         if (this.registers.A === 0)
             f |= 0x80; // Z
-        if ((originalA & 0xF) < ((value & 0xF) + carry))
+        if ((originalA & 0x0F) < ((value & 0x0F) + carry))
             f |= 0x20; // H
-        if (result < 0)
+        if (originalA < (value + carry))
             f |= 0x10; // C
 
         this.registers.F = f;
@@ -994,9 +1034,9 @@ class GameBoyCPU {
         let f = 0x40; // N is 1
         if ((result & 0xFF) === 0)
             f |= 0x80; // Z
-        if ((originalA & 0xF) < (value & 0xF))
+        if ((originalA & 0x0F) < (value & 0x0F))
             f |= 0x20; // H
-        if (result < 0)
+        if (originalA < value)
             f |= 0x10; // C
 
         this.registers.F = f;
@@ -1004,18 +1044,33 @@ class GameBoyCPU {
 
     // Helper for PUSH opcodes
     push(highByte, lowByte) {
-        this.registers.SP--;
-        this.writeMemory(this.registers.SP, highByte);
-        this.registers.SP--;
-        this.writeMemory(this.registers.SP, lowByte);
+        // this.registers.SP--;
+        // this.writeMemory(this.registers.SP, highByte);
+        // this.registers.SP--;
+        // this.writeMemory(this.registers.SP, lowByte);
+
+        let sp = this.registers.SP;
+        sp = (sp - 1) & 0xFFFF;
+        this.writeMemory(sp, highByte);
+        sp = (sp - 1) & 0xFFFF;
+        this.writeMemory(sp, lowByte);
+        this.registers.SP = sp;
     }
 
     // Helper for POP opcodes
     pop() {
-        const lowByte = this.memory[this.registers.SP];
-        this.registers.SP++; // Increment SP to point to the high byte
-        const highByte = this.memory[this.registers.SP];
-        this.registers.SP++; // Increment SP again
+        // const lowByte = this.memory[this.registers.SP];
+        // this.registers.SP++; // Increment SP to point to the high byte
+        // const highByte = this.memory[this.registers.SP];
+        // this.registers.SP++; // Increment SP again
+        // return (highByte << 8) | lowByte;
+
+        let sp = this.registers.SP;
+        const lowByte = this.readMemory(sp);
+        sp = (sp + 1) & 0xFFFF;
+        const highByte = this.readMemory(sp);
+        sp = (sp + 1) & 0xFFFF;
+        this.registers.SP = sp;
         return (highByte << 8) | lowByte;
     }
 
@@ -1354,7 +1409,8 @@ class GameBoyCPU {
             this.haltBugScheduled = true;
         }
         else {
-            this.stopEnabled = true;
+            // this.stopEnabled = true;
+            // this.justEnteredStop = true;
         }
 
         this.timer.resetDiv();
@@ -1516,35 +1572,33 @@ class GameBoyCPU {
 
     opcodeDAA() { // 0x27: DAA (Decimal Adjust Accumulator)
         let a = this.registers.A;
-        let correction = 0;
         const nFlag = (this.registers.F & 0x40) !== 0;
         const hFlag = (this.registers.F & 0x20) !== 0;
         let cFlag = (this.registers.F & 0x10) !== 0;
 
         if (!nFlag) { // After an addition
-            if (hFlag || (a & 0x0F) > 9) {
-                correction |= 0x06;
-            }
             if (cFlag || a > 0x99) {
-                correction |= 0x60;
+                a += 0x60;
                 cFlag = true;
             }
-            a += correction;
-        } else { // After a subtraction
-            if (hFlag) {
-                a -= 0x06;
+            if (hFlag || (a & 0x0F) > 0x09) {
+                a += 0x06;
             }
+        } else { // After a subtraction
             if (cFlag) {
                 a -= 0x60;
+            }
+            if (hFlag) {
+                a -= 0x06;
             }
         }
 
         this.registers.A = a & 0xFF;
 
-        let f = nFlag ? 0x40 : 0; // Preserve N flag
-        if (this.registers.A === 0) f |= 0x80; // Set Z flag
-        // H flag is always cleared
-        if (cFlag) f |= 0x10; // Set C flag
+        // Flags: Z is set if A is 0. N is preserved. H is cleared. C is set or preserved.
+        let f = nFlag ? 0x40 : 0; // Preserve N flag, clear Z, H
+        if (this.registers.A === 0) f |= 0x80; // Set Z
+        if (cFlag) f |= 0x10; // Set C
         this.registers.F = f;
 
         this.lastInstructionSize = 1;
@@ -2132,14 +2186,15 @@ class GameBoyCPU {
     }
             
     opcodeHALT() { // 0x76: HALT - Freeze the CPU until reset
-        // console.log("HALT instruction executed");
+        console.log("HALT instruction executed");
         // console.log(`HALT at PC=0x${this.registers.PC.toString(16)}, IME=${this.interruptsEnabled}, IF=0x${this.IF.toString(16)}, IE=0x${this.IE.toString(16)}, A=0x${this.registers.A.toString(16)}`);
         const pendingInterrupts = (this.IF & this.IE & 0x1F) !== 0;
 
         if (!this.interruptsEnabled && pendingInterrupts) {
             // HALT bug occurs when interrupts are disabled but there's a pending interrupt
             this.haltBugScheduled = true;
-        } else {
+        }
+        else {
             this.haltEnabled = true;
         }
 
@@ -2945,6 +3000,7 @@ class GameBoyCPU {
     opcodeRET() { // 0xC9: RET - Return from subroutine
         // Pop the 16-bit return address from the stack and jump to it.
         this.registers.PC = this.pop();
+        console.log(`RET to 0x${this.registers.PC.toString(16)}`);
 
         this.lastInstructionSize = 1;
         return 16;
@@ -2974,6 +3030,8 @@ class GameBoyCPU {
 
         // Push the address of the next instruction (PC + 3) onto the stack
         const returnAddress = this.registers.PC + 3;
+        
+        console.log(`CALL to 0x${address.toString(16)} from 0x${this.registers.PC.toString(16)}, return to 0x${returnAddress.toString(16)}`);
         this.push((returnAddress >> 8) & 0xFF, returnAddress & 0xFF);
 
         this.registers.PC = address;
@@ -3304,13 +3362,13 @@ class GameBoyCPU {
 
         let f = 0; // Flags: Z=0, N=0
 
-        // Half Carry: Check carry from bit 3 of (SP_low + n)
-        if (((sp & 0xF) + (n_unsigned & 0xF)) > 0xF) {
+        // Half Carry: Check carry from bit 3 on the lower byte of SP + n
+        if (((sp & 0x0F) + (n_unsigned & 0x0F)) > 0x0F) {
             f |= 0x20; // Set H
         }
 
-        // Carry: Check carry from bit 7 of (SP_low + n)
-        if (((sp & 0xFF) + (n_unsigned & 0xFF)) > 0xFF) {
+        // Carry: Check carry from bit 7 on the lower byte of SP + n
+        if (((sp & 0xFF) + n_unsigned) > 0xFF) {
             f |= 0x10; // Set C
         }
         this.registers.F = f;
@@ -3372,7 +3430,7 @@ class GameBoyCPU {
     }
 
     opcodeILLEGAL() { // Handler for illegal opcodes
-        const opcode = this.readMemory(this.registers.PC);
+        const opcode = this.memory[this.registers.PC];
         console.warn(`Executed illegal opcode: 0x${opcode.toString(16)} at 0x${(this.registers.PC).toString(16)}`);
         
         this.lastInstructionSize = 1;

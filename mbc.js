@@ -24,13 +24,13 @@ class MBC1 extends MBC {
         }
         else if (address < 0x4000) { // ROM Bank Number (lower 5 bits)
             const bank = value & 0x1F;
-            this.romBank = (this.romBank & 0xE0) | (bank === 0 ? 1 : bank);
-            this.switchRomBank();
+            // Combine with upper bits if in ROM mode
+            const upperBits = this.romBank & 0x60; // Always preserve upper bits
+            this.romBank = upperBits | (bank === 0 ? 1 : bank);
         }
         else if (address < 0x6000) { // RAM Bank or ROM Bank upper bits
             if (this.mode === 0) { // ROM mode
-                this.romBank = (this.romBank & 0x1F) | ((value & 3) << 5);
-                this.switchRomBank();
+                this.romBank = (this.romBank & 0x1F) | ((value & 0x03) << 5);
             }
             else { // RAM mode
                 this.ramBank = value & 3;
@@ -41,15 +41,33 @@ class MBC1 extends MBC {
         }
     }
 
-    switchRomBank() {
-        const maxBanks = this.rom.length / 0x4000;
-        const effectiveBank = this.romBank % maxBanks;
-        const bankOffset = effectiveBank * 0x4000;
+    readRom(address) {
+        let bank = 0;
 
-        // Load the new bank into the 0x4000-0x7FFF memory region
-        for (let i = 0; i < 0x4000; i++) {
-            this.cpu.memory[0x4000 + i] = this.rom[bankOffset + i];
+        if (address < 0x4000) {
+            // Fixed Bank Area (0x0000-0x3FFF)
+            if (this.mode === 1) {
+                // In RAM banking mode, the upper bits of romBank select the bank for this area.
+                bank = (this.romBank & 0x60);
+            }
+        } 
+        else {
+            // Switchable Bank Area (0x4000-0x7FFF)
+            if (this.mode === 1) {
+                // In RAM banking mode, the upper bits are ignored for this area.
+                bank = (this.romBank & 0x1F);
+            }
+            else {
+                bank = this.romBank;
+            }
         }
+
+        const maxBanks = this.rom.length / 0x4000;
+        const effectiveBank = bank % maxBanks;
+        const bankOffset = effectiveBank * 0x4000;
+        const romAddress = bankOffset + (address & 0x3FFF); // Get offset within the 16KB bank
+
+        return this.rom[romAddress];
     }
 
     readRam(address) {
