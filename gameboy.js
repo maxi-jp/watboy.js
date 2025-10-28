@@ -15,35 +15,62 @@ class GameBoy {
         this.gpu = new GameBoyGPU(canvas, ctx, this.screenWidth, this.screenHeight, this.cpu);
         this.joypad = new Joypad(this.cpu);
 
-        this.timer.setCPU(this.cpu, this.cpu.memory);
+        this.timer.SetCPU(this.cpu, this.cpu.memory);
+        this.cpu.SetGPU(this.gpu);
+
     }
     
     LoadRom(romData) {
         this.romLoaded = romData;
-        this.cpu.loadROM(romData);
-        this.cpu.start(); // Start the emulation
+        this.cpu.LoadROM(romData);
+        this.cpu.Start(); // Start the emulation
+
+        // this.cpu.PrintRegisters();
     }
 
     RunFrame() {
         const cyclesPerFrame = 70224; // Number of CPU cycles per frame
-        let cyclesThisFrame = 0;
+        let totalCycles = 0;
 
-        while (cyclesThisFrame < cyclesPerFrame) {
-            const cycles = this.cpu.runStep();
-            cyclesThisFrame += cycles;
+        while (totalCycles < cyclesPerFrame) {
+            let cycles = 0;
 
-            this.timer.update(cycles);
-            this.gpu.update(cycles);
-            this.joypad.update();
+            // Execute normal CPU instruction or handle halt
+            if (!this.cpu.haltEnabled) {
+                cycles = this.cpu.RunStep();
+                this.cpu.steps++;
+
+                // Process EI delay on instruction ticks
+                if (this.cpu.imeCounter > 0) {
+                    this.cpu.imeCounter--;
+                    if (this.cpu.imeCounter === 0)
+                        this.cpu.EnableInterrupts();
+                }
+            }
+            else {
+                cycles = 4; // If halted, just burn 4 cycles
+            }
+
+            // Update hardware components (they may set interrupt flags)
+            this.timer.Update(cycles);
+            this.gpu.Update(cycles);
+            this.joypad.Update();
+
+            // Check for interrupts AFTER hardware updates (matches reference implementations)
+            const interruptCycles = this.cpu.HandleInterrupts();
+            if (interruptCycles > 0)
+                totalCycles += interruptCycles; // Add interrupt service cycles to total
+
+            totalCycles += cycles;
         }
     }
 
     RunCPUStep() {
-        this.cpu.runStep();
+        this.cpu.RunStep();
     }
 
     GPURender() {
-        this.gpu.drawFrame();
+        this.gpu.DrawFrame();
     }
 
     SetColorPallete(id) {

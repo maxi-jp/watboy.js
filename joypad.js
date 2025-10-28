@@ -6,7 +6,7 @@ class Joypad {
         // Input management is done in the global variable "Input" (script input.js)
     }
 
-    update() {
+    Update() {
         // P1 register is at 0xFF00
         let p1 = this.cpu.memory[0xFF00];
         
@@ -29,10 +29,10 @@ class Joypad {
             if (Input.IsKeyPressed(KEY_DOWN )) p1Input &= ~0x08;
         }
 
-        // If any button bit changed from 1 (unpressed) to 0 (pressed), request an interrupt.
+        // If any button bit changed from 1 (unpressed) to 0 (pressed), request an interrupt
         const newlyPressed = this.previousState & (~p1Input);
         if (newlyPressed !== 0) {
-            this.cpu.requestInterrupt(this.cpu.INT.JOYPAD);
+            this.cpu.RequestInterrupt(this.cpu.INT.JOYPAD);
         }
         this.previousState = p1Input;
 

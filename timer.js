@@ -5,26 +5,34 @@ class GameBoyTimer {
     get TMA () { return this.memory[0xFF06]; }
     get TAC () { return this.memory[0xFF07]; }
 
-    set DIV (v) { this.cpu.writeMemory(0xFF04, v); }
-    set TIMA(v) { this.cpu.writeMemory(0xFF05, v); }
-    set TMA (v) { this.cpu.writeMemory(0xFF06, v); }
-    set TAC (v) { this.cpu.writeMemory(0xFF07, v); }
+    set DIV (v) { this.cpu.WriteMemory(0xFF04, v); }
+    set TIMA(v) { this.cpu.WriteMemory(0xFF05, v); }
+    set TMA (v) { this.cpu.WriteMemory(0xFF06, v); }
+    set TAC (v) { this.cpu.WriteMemory(0xFF07, v); }
 
     constructor() {
         // Internal counters for DIV and TIMA, measured in T-cycles (CPU clock cycles)
         this.divCounter = 0;
         this.timaCounter = 0;
+        this.timaOverflowed = false;
 
         // CPU clock cycles needed for one TIMA increment
         this.clockDividers = [1024, 16, 64, 256]; // CPU Clock (4194304 Hz) dividers
     }
 
-    setCPU(cpu, memory) {
+    SetCPU(cpu, memory) {
         this.cpu = cpu;
         this.memory = memory;
     }
 
-    update(cycles) {
+    Update(cycles) {
+        // First, handle any pending overflow from the previous cycle
+        if (this.timaOverflowed) {
+            this.TIMA = this.TMA; // Reload TIMA with TMA
+            this.cpu.RequestInterrupt(this.cpu.INT.TIMER);
+            this.timaOverflowed = false;
+        }
+        
         // DIV update (increments every T-cycle)
         this.divCounter = (this.divCounter + cycles) & 0xFFFF; // Keep it 16-bit
         // The DIV register is the upper 8 bits of this 16-bit counter.
@@ -54,10 +62,12 @@ class GameBoyTimer {
 
             if (tima > 0xFF) {
                 // Overflow occurred: reset TIMA to TMA value and request interrupt
-                tima = this.TMA; // Reset TIMA to the value in TMA
-                this.cpu.requestInterrupt(this.cpu.INT.TIMER); // Request a timer interrupt
+                // tima = this.TMA; // Reset TIMA to the value in TMA
+                // this.cpu.requestInterrupt(this.cpu.INT.TIMER); // Request a timer interrupt
 
                 // console.log(`Timer overflow: TIMA reset to 0x${this.TMA.toString(16)}, interrupt requested, IF=0x${this.memory[0xFF0F].toString(16)}, A=0x${this.cpu.registers.A.toString(16)}`);
+                tima = 0;
+                this.timaOverflowed = true; // Schedule the reload and interrupt request
             }
             
             this.TIMA = tima
@@ -66,7 +76,7 @@ class GameBoyTimer {
         }
     }
 
-    resetDiv() {
+    ResetDiv() {
         this.divCounter = 0;
         this.memory[0xFF04] = 0; // direct write, avoid looping
     }

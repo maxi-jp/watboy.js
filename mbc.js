@@ -3,7 +3,7 @@ class MBC {
         this.cpu = cpu;
     }
 
-    handleWrite(address, value) { }
+    HandleWrite(address, value) { }
 }
 
 class MBC1 extends MBC {
@@ -18,7 +18,7 @@ class MBC1 extends MBC {
         this.mode = 0; // 0 = ROM banking, 1 = RAM banking
     }
 
-    handleWrite(address, value) {
+    HandleWrite(address, value) {
         if (address < 0x2000) { // RAM Enable
             this.ramEnabled = (value & 0x0A) === 0x0A;
         }
@@ -41,8 +41,9 @@ class MBC1 extends MBC {
         }
     }
 
-    readRom(address) {
+    ReadRom(address) {
         let bank = 0;
+        let romAddress;
 
         if (address < 0x4000) {
             // Fixed Bank Area (0x0000-0x3FFF)
@@ -50,27 +51,30 @@ class MBC1 extends MBC {
                 // In RAM banking mode, the upper bits of romBank select the bank for this area.
                 bank = (this.romBank & 0x60);
             }
+            else {
+                bank = 0;
+            }
+            romAddress = (bank * 0x4000) + address;
         } 
         else {
             // Switchable Bank Area (0x4000-0x7FFF)
-            if (this.mode === 1) {
-                // In RAM banking mode, the upper bits are ignored for this area.
-                bank = (this.romBank & 0x1F);
+            bank = this.romBank;
+
+            // Banks 0x00, 0x20, 0x40, and 0x60 are not usable and are automatically
+            // translated to the next bank up (0x01, 0x21, 0x41, 0x61).
+            if ((bank & 0x1F) === 0) {
+                bank |= 1;
             }
-            else {
-                bank = this.romBank;
-            }
+            
+            const bankOffset = bank * 0x4000;
+            romAddress = bankOffset + (address - 0x4000);
         }
 
         const maxBanks = this.rom.length / 0x4000;
-        const effectiveBank = bank % maxBanks;
-        const bankOffset = effectiveBank * 0x4000;
-        const romAddress = bankOffset + (address & 0x3FFF); // Get offset within the 16KB bank
-
-        return this.rom[romAddress];
+        return this.rom[romAddress % (maxBanks * 0x4000)];
     }
 
-    readRam(address) {
+    ReadRam(address) {
         if (!this.ramEnabled)
             return 0xFF;
 
@@ -78,11 +82,36 @@ class MBC1 extends MBC {
         return this.ram[ramAddress];
     }
 
-    writeRam(address, value) {
+    WriteRam(address, value) {
         if (!this.ramEnabled)
             return;
         
         const ramAddress = (this.mode === 1 ? this.ramBank * 0x2000 : 0) + (address - 0xA000);
         this.ram[ramAddress] = value;
+    }
+}
+
+class ROM_ONLY extends MBC {
+    constructor(cpu, romData) {
+        super(cpu);
+        this.rom = romData;
+    }
+
+    HandleWrite(address, value) {
+        // ROM is not writable, so this does nothing.
+    }
+
+    ReadRom(address) {
+        // Directly read from the ROM data at the given address.
+        return this.rom[address];
+    }
+
+    ReadRam(address) {
+        // This cartridge type has no external RAM.
+        return 0xFF;
+    }
+
+    WriteRam(address, value) {
+        // No RAM to write to.
     }
 }

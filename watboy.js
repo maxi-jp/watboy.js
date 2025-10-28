@@ -88,7 +88,8 @@ function Init() {
     romInput = document.getElementById('fileInput');
     romInput.addEventListener('change', (event) => loadROM(event.target.files[0], () => {
         Start();
-        Loop();
+        setInterval(Loop, 1);
+        //Loop();
     }));
 }
 
@@ -98,7 +99,7 @@ function Start() {
 }
 
 function Loop() {
-    requestAnimationFrameID = requestAnimationFrame(Loop);
+    // requestAnimationFrameID = requestAnimationFrame(Loop);
 
     // compute FPS
     let now = performance.now();

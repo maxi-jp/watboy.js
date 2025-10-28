@@ -24,31 +24,27 @@ class GameBoyGPU {
         this.modeClock = 0;
         this.line = 0;
         this.windowLineCounter = 0;
+        this.lcdDisabledDuringVBlank = false; // Flag to track LCD disable during VBLANK
+        
+        // Initialize LY register
+        this.memory[0xFF44] = this.line;
 
         this.colorPalets = [
-            [[255, 255, 255], [192, 192, 192], [96, 96, 96], [0, 0, 0]], // Classic Game Boy shades: White, Light Gray, Dark Gray, Black
-            [[127, 134, 15], [87, 124, 68], [54, 93, 72], [42, 69, 59]], // DMG-01
-            [[250, 251, 246], [198, 183, 190], [86, 90, 117], [15, 15, 27]], // https://lospec.com/palette-list/hollow
-            [[230, 214, 156], [180, 165, 106], [123, 113, 98], [57, 56, 41]], // https://lospec.com/palette-list/muddysand
-            [[139, 229, 255], [96, 143, 207], [117, 80, 232], [98, 46, 76]], // https://lospec.com/palette-list/muddysand
+            [[255, 255, 255], [192, 192, 192], [ 96,  96,  96], [  0,  0,  0]], // Classic Game Boy shades: White, Light Gray, Dark Gray, Black
+            [[127, 134,  15], [ 87, 124,  68], [ 54,  93,  72], [ 42, 69, 59]], // DMG-01
+            [[250, 251, 246], [198, 183, 190], [ 86,  90, 117], [ 15, 15, 27]], // https://lospec.com/palette-list/hollow
+            [[230, 214, 156], [180, 165, 106], [123, 113,  98], [ 57, 56, 41]], // https://lospec.com/palette-list/muddysand
+            [[139, 229, 255], [ 96, 143, 207], [117,  80, 232], [ 98, 46, 76]], // https://lospec.com/palette-list/muddysand
         ];
         this.currentPalet = this.colorPalets[0];
     }
 
-    update(cycles) {
+    Update(cycles) {
+        // if (this.cpu.steps < 10000) { // Only for first 10k steps
+        //     this.print(cycles);
+        // }
+        
         const lcdc = this.memory[0xFF40];
-        // If LCD is disabled, GPU is idle, LY is 0, and mode is HBLANK.
-        if ((lcdc & 0x80) === 0) {
-            // This should only run once when the LCD is turned off.
-            if (this.mode !== GPU_MODES.HBLANK || this.line !== 0) {
-                this.modeClock = 0;
-                this.line = 0;
-                this.memory[0xFF44] = 0;
-                this.setMode(GPU_MODES.HBLANK);
-                this.checkLYC();
-            }
-            return;
-        }
 
         this.modeClock += cycles;
 
@@ -56,55 +52,53 @@ class GameBoyGPU {
             case GPU_MODES.HBLANK: // HBlank
                 if (this.modeClock >= 204) {
                     this.modeClock -= 204;
-                    this.line++;
-                    this.memory[0xFF44] = this.line; // Update LY register
-                    this.checkLYC();
+                    this.line++; // Increment to the next line
+                    this.UpdateLY(); // Update LY register and check LYC
 
                     if (this.line === 144) {
-                        this.setMode(GPU_MODES.VBLANK);
-                        this.cpu.requestInterrupt(this.cpu.INT.VBLANK); // Request V-Blank Interrupt
-                        this.drawFrame();
+                        this.SetMode(GPU_MODES.VBLANK);
+                        this.cpu.RequestInterrupt(this.cpu.INT.VBLANK);
+                        this.DrawFrame(); // Render the completed frame
                     }
                     else {
-                        this.setMode(GPU_MODES.OAM_SEARCH);
+                        this.SetMode(GPU_MODES.OAM_SEARCH);
                     }
                 }
                 break;
+
             case GPU_MODES.VBLANK: // VBlank
                 if (this.modeClock >= 456) {
                     this.modeClock -= 456;
                     this.line++;
 
-                    if (this.line > 153) {
+                    if (this.line > 153) { // End of V-Blank
                         this.line = 0;
                         this.windowLineCounter = 0; // Reset for new frame
-                        this.memory[0xFF44] = this.line;
-                        this.checkLYC();
-                        this.setMode(GPU_MODES.OAM_SEARCH);
+                        this.SetMode(GPU_MODES.OAM_SEARCH);
                     }
-                    else {
-                        this.memory[0xFF44] = this.line; // Update LY register
-                        this.checkLYC();
-                    }
+                    
+                    this.UpdateLY(); // Update LY register and check LYC
                 }
                 break;
+
             case GPU_MODES.OAM_SEARCH: // OAM search
                 if (this.modeClock >= 80) {
                     this.modeClock -= 80;
-                    this.setMode(GPU_MODES.DRAWING);
+                    this.SetMode(GPU_MODES.DRAWING);
                 }
                 break;
+
             case GPU_MODES.DRAWING: // Drawing pixels
                 if (this.modeClock >= 172) {
                     this.modeClock -= 172;
-                    this.drawScanline();
-                    this.setMode(GPU_MODES.HBLANK);
+                    this.DrawScanline();
+                    this.SetMode(GPU_MODES.HBLANK);
                 }
                 break;
         }
     }
 
-    setMode(newMode) {
+    SetMode(newMode) {
         this.mode = newMode;
 
         let stat = this.memory[0xFF41];
@@ -124,11 +118,23 @@ class GameBoyGPU {
         const oamInt = (this.mode === GPU_MODES.OAM_SEARCH) && (stat & 0x20);
 
         if (hblankInt || vblankInt || oamInt) {
-            this.cpu.requestInterrupt(this.cpu.INT.LCD);
+            this.cpu.RequestInterrupt(this.cpu.INT.LCD);
         }
     }
 
-    checkLYC() {
+    UpdateLY() {
+        // const oldLY = this.memory[0xFF44];
+        // if (this.cpu.steps >= 8180 && this.cpu.steps <= 8185) {
+        //     console.log(`Step ${this.cpu.steps}: UpdateLY() called, setting LY from ${oldLY} to ${this.line}`);
+        // }
+        this.memory[0xFF44] = this.line;
+        // if (this.cpu.steps >= 8180 && this.cpu.steps <= 8185 && oldLY !== this.line) {
+        //     console.log(`Step ${this.cpu.steps}: LY changed from ${oldLY} to ${this.line}`);
+        // }
+        this.CheckLYC();
+    }
+
+    CheckLYC() {
         const ly = this.memory[0xFF44];
         const lyc = this.memory[0xFF45];
         let stat = this.memory[0xFF41];
@@ -138,7 +144,7 @@ class GameBoyGPU {
             // Don't request interrupt if LCD is off
             const lcdc = this.memory[0xFF40];
             if ((lcdc & 0x80) !== 0 && (stat & 0x40)) { // If LYC=LY interrupt is enabled
-                this.cpu.requestInterrupt(this.cpu.INT.LCD);
+                this.cpu.RequestInterrupt(this.cpu.INT.LCD);
             }
         }
         else {
@@ -147,12 +153,12 @@ class GameBoyGPU {
         this.memory[0xFF41] = stat;
     }
 
-    drawScanline() {
+    DrawScanline() {
         const lcdc = this.memory[0xFF40];
 
         // Is background display enabled? (LCDC Bit 0)
         if ((lcdc & 0x01) !== 0) {
-            this.drawBackground();
+            this.DrawBackground();
         }
         else {
             // If not, the scanline is blank (white).
@@ -165,11 +171,11 @@ class GameBoyGPU {
 
         // Are sprites enabled? (LCDC Bit 1)
         if ((lcdc & 0x02) !== 0) {
-            this.drawSprites();
+            this.DrawSprites();
         }
     }
 
-    drawBackground() {
+    DrawBackground() {
         const lcdc = this.memory[0xFF40];
         const scy = this.memory[0xFF42];
         const scx = this.memory[0xFF43];
@@ -201,7 +207,7 @@ class GameBoyGPU {
             // Calculate the address of the tile's data in VRAM.
             let tileDataAddress;
             if (signedTileIndices) {
-                tileDataAddress = 0x9000 + (this.cpu.signedValue(tileId) * 16);
+                tileDataAddress = 0x9000 + (this.cpu.SignedValue(tileId) * 16);
             }
             else {
                 tileDataAddress = tileDataBase + (tileId * 16);
@@ -221,7 +227,7 @@ class GameBoyGPU {
         }
     }
 
-    drawSprites() {
+    DrawSprites() {
         const lcdc = this.memory[0xFF40];
         const spriteHeight = (lcdc & 0x04) ? 16 : 8;
         const obp0 = this.memory[0xFF48];
@@ -305,12 +311,12 @@ class GameBoyGPU {
         }
     }
 
-    drawFrame() {
-        // this.renderAsRects();
-        this.renderAsImageData();
+    DrawFrame() {
+        // this.RenderAsRects();
+        this.RenderAsImageData();
     }
 
-    renderAsImageData() {
+    RenderAsImageData() {
         for (let i = 0; i < this.frameBuffer.length; i++) {
             const shadeIndex = this.frameBuffer[i]; // This is 0, 1, 2, or 3
             const color = this.currentPalet[shadeIndex];
@@ -327,7 +333,7 @@ class GameBoyGPU {
         this.ctx.putImageData(this.imageData, 0, 0);
     }
 
-    renderAsRects() {
+    RenderAsRects() {
         for (let i = 0; i < this.screenWidth * this.screenHeight; i++) {
             const colorIndex = this.frameBuffer[i];
             const color = this.currentPalet[colorIndex];
@@ -340,5 +346,17 @@ class GameBoyGPU {
 
     SetColorPallete(id) {
         this.currentPalet = this.colorPalets[id];
+    }
+
+    HandleLcdcWrite(value) {
+        if (this.cpu.steps < 10000) {
+            const lcdWasOn = (this.memory[0xFF40] & 0x80) !== 0;
+            const lcdIsOn = (value & 0x80) !== 0;
+            console.log(`LCDC Write: step=${this.cpu.steps}, value=0x${value.toString(16)}, LCD was ${lcdWasOn ? 'ON' : 'OFF'}, now ${lcdIsOn ? 'ON' : 'OFF'}`);
+        }
+    }
+
+    Print(cycles) {
+        console.log(`GPU Update: step=${this.cpu.steps}, cycles=${cycles}, modeClock=${this.modeClock}, mode=${this.mode}, line=${this.line}`);
     }
 }
