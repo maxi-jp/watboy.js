@@ -6,6 +6,7 @@ class GameBoy {
         this.gpu = null;
         this.timer = null;
         this.joypad = null;
+        this.apu = null;
         this.romLoaded = null;
     }
 
@@ -14,14 +15,16 @@ class GameBoy {
         this.cpu = new GameBoyCPU(this.timer);
         this.gpu = new GameBoyGPU(canvas, ctx, this.screenWidth, this.screenHeight, this.cpu);
         this.joypad = new Joypad(this.cpu);
+        this.apu = new APU(this.cpu);
 
         this.timer.SetCPU(this.cpu, this.cpu.memory);
         this.cpu.SetGPU(this.gpu);
-
+        this.cpu.SetAPU(this.apu);
     }
     
     LoadRom(romData) {
         this.romLoaded = romData;
+        this.apu.Initialize(); // Initialize audio context on ROM load
         this.cpu.LoadROM(romData);
         this.cpu.Start(); // Start the emulation
 
@@ -54,6 +57,7 @@ class GameBoy {
             // Update hardware components (they may set interrupt flags)
             this.timer.Update(cycles);
             this.gpu.Update(cycles);
+            this.apu.Update(cycles);
             this.joypad.Update();
 
             // Check for interrupts AFTER hardware updates (matches reference implementations)

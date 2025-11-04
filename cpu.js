@@ -13,6 +13,9 @@ class GameBoyCPU {
 
         this.strictMode = false; // if true: only wake from STOP on Joypad interrupt
 
+        this.gpu = null;
+        this.apu = null;
+
         // Private storage for 8-bit registers
         const _r = {
             A: 0, B: 0, C: 0, D: 0, E: 0, F: 0, H: 0, L: 0, 
@@ -365,6 +368,10 @@ class GameBoyCPU {
         this.gpu = gpu;
     }
 
+    SetAPU(apu) {
+        this.apu = apu;
+    }
+
     Reset() {
         // Initialize registers to their power-on state
         this.registers.A  = 0x01; // Accumulator
@@ -457,6 +464,12 @@ class GameBoyCPU {
         if (address === 0xFF46) {
             this.DoDMATransfer(value);
             return;
+        }
+
+        // Sound registers (0xFF10 - 0xFF26)
+        if (address >= 0xFF10 && address <= 0xFF26) {
+            this.apu.WriteRegister(address, value);
+            // We still write to memory so other parts of the system can read it
         }
 
         // Trap writes to LCDC register AND delegate to GPU
