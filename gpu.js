@@ -6,6 +6,19 @@ const GPU_MODES = {
 }
 
 class GameBoyGPU {
+
+    get lcdc() { return this.memory[0xFF40]; }
+    get stat() { return this.memory[0xFF41]; }
+    get scy()  { return this.memory[0xFF42]; }
+    get scx()  { return this.memory[0xFF43]; }
+    get ly()   { return this.memory[0xFF44]; }
+    get lyc()  { return this.memory[0xFF45]; }
+    get bgp()  { return this.memory[0xFF47]; }
+    get obp0() { return this.memory[0xFF48]; }
+    get obp1() { return this.memory[0xFF49]; }
+    get wy()   { return this.memory[0xFF4A]; }
+    get wx()   { return this.memory[0xFF4B] - 7; }
+    
     constructor(canvas, ctx, screenWidth, screenHeight, cpu) {
         this.canvas = canvas;
         this.ctx = ctx ? ctx : canvas.getContext('2d');
@@ -40,12 +53,6 @@ class GameBoyGPU {
     }
 
     Update(cycles) {
-        // if (this.cpu.steps < 10000) { // Only for first 10k steps
-        //     this.print(cycles);
-        // }
-        
-        const lcdc = this.memory[0xFF40];
-
         this.modeClock += cycles;
 
         switch (this.mode) {
@@ -93,6 +100,11 @@ class GameBoyGPU {
                     this.modeClock -= 172;
                     this.DrawScanline();
                     this.SetMode(GPU_MODES.HBLANK);
+
+                    // Increment window line counter if window is visible on this line
+                    if ((this.lcdc & 0x20) && this.line >= this.wy && this.wx <= 166) {
+                        this.windowLineCounter++;
+                    }
                 }
                 break;
         }
@@ -101,7 +113,7 @@ class GameBoyGPU {
     SetMode(newMode) {
         this.mode = newMode;
 
-        let stat = this.memory[0xFF41];
+        let stat = this.stat;
         // Update mode bits in STAT register
         stat = (stat & 0xFC) | this.mode;
         this.memory[0xFF41] = stat;
@@ -123,27 +135,17 @@ class GameBoyGPU {
     }
 
     UpdateLY() {
-        // const oldLY = this.memory[0xFF44];
-        // if (this.cpu.steps >= 8180 && this.cpu.steps <= 8185) {
-        //     console.log(`Step ${this.cpu.steps}: UpdateLY() called, setting LY from ${oldLY} to ${this.line}`);
-        // }
         this.memory[0xFF44] = this.line;
-        // if (this.cpu.steps >= 8180 && this.cpu.steps <= 8185 && oldLY !== this.line) {
-        //     console.log(`Step ${this.cpu.steps}: LY changed from ${oldLY} to ${this.line}`);
-        // }
         this.CheckLYC();
     }
 
     CheckLYC() {
-        const ly = this.memory[0xFF44];
-        const lyc = this.memory[0xFF45];
-        let stat = this.memory[0xFF41];
+        let stat = this.stat;
 
-        if (ly === lyc) {
+        if (this.ly === this.lyc) {
             stat |= 0x04; // Set coincidence flag
             // Don't request interrupt if LCD is off
-            const lcdc = this.memory[0xFF40];
-            if ((lcdc & 0x80) !== 0 && (stat & 0x40)) { // If LYC=LY interrupt is enabled
+            if ((this.lcdc & 0x80) !== 0 && (stat & 0x40)) { // If LYC=LY interrupt is enabled
                 this.cpu.RequestInterrupt(this.cpu.INT.LCD);
             }
         }
@@ -154,7 +156,7 @@ class GameBoyGPU {
     }
 
     DrawScanline() {
-        const lcdc = this.memory[0xFF40];
+        const lcdc = this.lcdc;
 
         // Is background display enabled? (LCDC Bit 0)
         if ((lcdc & 0x01) !== 0) {
@@ -169,17 +171,76 @@ class GameBoyGPU {
             }
         }
 
+        // Draw the window layer over the background
+        this.DrawWindow();
+
         // Are sprites enabled? (LCDC Bit 1)
         if ((lcdc & 0x02) !== 0) {
             this.DrawSprites();
         }
     }
 
+    DrawWindow() {
+        const lcdc = this.lcdc;
+        const wy = this.wy;
+        const wx = this.wx;
+        const bgp = this.bgp;
+
+        // Is the window enabled and is it on the current scanline?
+        if (!((lcdc & 0x20) && this.line >= wy)) {
+            return;
+        }
+
+        // Which tile map to use? (LCDC Bit 6)
+        const tileMapBase = (lcdc & 0x40) ? 0x9C00 : 0x9800;
+
+        // Which tile data to use? (LCDC Bit 4)
+        const tileDataBase = (lcdc & 0x10) ? 0x8000 : 0x8800;
+        const signedTileIndices = (tileDataBase === 0x8800);
+
+        // Y coordinate within the window's tile grid
+        const yOnMap = this.windowLineCounter;
+        const tileRow = yOnMap % 8;
+
+        for (let x = 0; x < this.screenWidth; x++) {
+            // Only draw pixels that are part of the window on this line
+            if (x < wx) {
+                continue;
+            }
+
+            // X coordinate within the window's tile grid
+            const xOnMap = x - wx;
+
+            const tileIdAddress = tileMapBase + (Math.floor(yOnMap / 8) * 32) + Math.floor(xOnMap / 8);
+            let tileId = this.memory[tileIdAddress];
+
+            let tileDataAddress;
+            if (signedTileIndices) {
+                tileDataAddress = 0x9000 + (this.cpu.SignedValue(tileId) * 16);
+            }
+            else {
+                tileDataAddress = tileDataBase + (tileId * 16);
+            }
+
+            const tileRowAddress = tileDataAddress + (tileRow * 2);
+            const byte1 = this.memory[tileRowAddress];
+            const byte2 = this.memory[tileRowAddress + 1];
+
+            const bitPosition = 7 - (xOnMap % 8);
+            const colorNumber = (((byte2 >> bitPosition) & 1) << 1) | ((byte1 >> bitPosition) & 1);
+            const shade = (bgp >> (colorNumber * 2)) & 0x03;
+
+            const pixelIndex = this.line * this.screenWidth + x;
+            this.frameBuffer[pixelIndex] = shade;
+            this.bgPriorityBuffer[pixelIndex] = (colorNumber !== 0);
+        }
+    }
+
     DrawBackground() {
-        const lcdc = this.memory[0xFF40];
-        const scy = this.memory[0xFF42];
-        const scx = this.memory[0xFF43];
-        const bgp = this.memory[0xFF47];
+        const lcdc = this.lcdc;
+        const scy = this.scy;
+        const scx = this.scx;
+        const bgp = this.bgp;
 
         // Which tile map to use? (LCDC Bit 3)
         const tileMapBase = (lcdc & 0x08) ? 0x9C00 : 0x9800;
@@ -228,10 +289,8 @@ class GameBoyGPU {
     }
 
     DrawSprites() {
-        const lcdc = this.memory[0xFF40];
+        const lcdc = this.lcdc;
         const spriteHeight = (lcdc & 0x04) ? 16 : 8;
-        const obp0 = this.memory[0xFF48];
-        const obp1 = this.memory[0xFF49];
 
         let spritesOnLine = [];
         // Find up to 10 sprites on the current scanline
@@ -269,7 +328,7 @@ class GameBoyGPU {
             const yFlip = (sprite.attributes & 0x40) !== 0;
             const xFlip = (sprite.attributes & 0x20) !== 0;
             const bgOverObj = (sprite.attributes & 0x80) !== 0;
-            const palette = (sprite.attributes & 0x10) ? obp1 : obp0;
+            const palette = (sprite.attributes & 0x10) ? this.obp1 : this.obp0;
 
             let tileRow = this.line - sprite.y;
             if (yFlip) {
@@ -291,12 +350,14 @@ class GameBoyGPU {
 
             for (let x = 0; x < 8; x++) {
                 const pixelX = sprite.x + x;
-                if (pixelX < 0 || pixelX >= this.screenWidth) continue;
+                if (pixelX < 0 || pixelX >= this.screenWidth)
+                    continue;
 
                 const bitPosition = xFlip ? x : 7 - x;
                 const colorNumber = (((byte2 >> bitPosition) & 1) << 1) | ((byte1 >> bitPosition) & 1);
 
-                if (colorNumber === 0) continue; // Color 0 is transparent for sprites
+                if (colorNumber === 0)
+                    continue; // Color 0 is transparent for sprites
 
                 const pixelIndex = this.line * this.screenWidth + pixelX;
 
