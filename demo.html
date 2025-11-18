@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WATBOY_JS Demo</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="demo.css">
+    <script src="timer.js"></script>
+    <script src="cpu.js"></script>
+    <script src="gpu.js"></script>
+    <script src="mbc.js"></script>
+    <script src="joypad.js"></script>
+    <script src="apu.js"></script>
+    <script src="gameboy.js"></script>
+    <script src="watboy.js"></script>
+    <script src="input.js"></script>
+</head>
+<body>
+    <div class="container">
+        <div class="gb_wallpaper" style="    position: absolute;
+    top: 108px;
+    left: 0;
+    width: 442px;
+    height: 728px;
+    background-image: url('helper resources/gameboy_wallpaper.png');
+    background-position: -1315px -1416px;
+    z-index: 1;"></div>
+        <div class="gameboy-container">
+            <div class="screen-area">
+                <canvas id="myCanvas" width="160" height="144" class="scale-2"></canvas>
+                <div class="powerled">BATTERY</div>
+            </div>
+            <div class="logo">maxi-jp <span>WATBOY.JS</span></div>
+            <div class="controls">
+                <div class="d-pad">
+                    <div class="d-pad-hole vertical"></div>
+                    <div class="d-pad-hole horizontal"></div>
+                    <div class="d-pad-direction top"></div>
+                    <div class="d-pad-direction bottom"></div>
+                    <div class="d-pad-direction left"></div>
+                    <div class="d-pad-direction right"></div>
+                    <div class="d-pad-direction center"></div>
+                </div>
+                <div class="ab-buttons">
+                    <div class="button button-b"></div>
+                    <div class="button button-a"></div>
+                </div>
+            </div>
+            <div class="start-select">
+                <div class="button">SELECT</div>
+                <div class="button">START</div>
+            </div>
+            <div class="speaker">
+                <div class="line"></div>
+                <div class="line"></div>
+                <div class="line"></div>
+                <div class="line"></div>
+                <div class="line"></div>
+            </div>
+        </div>
+
+        <div class="control-panel">
+            <h3>WatBoy.js Controls</h3>
+            
+            <div class="control-group">
+                <label for="fileInput">Load ROM</label>
+                <input type="file" name="fileInput" id="fileInput">
+            </div>
+
+            <div class="control-group">
+                <label for="palette-select">Color Palette</label>
+                <select name="palette" id="palette-select">
+                    <option value="0">Pocket</option>
+                    <option value="1">DMG-01</option>
+                    <option value="2">Poltergasm Hollow</option>
+                    <option value="3">Muddysand</option>
+                    <option value="4">WhishGB</option>
+                </select>
+            </div>
+
+            <div class="control-group">
+                <label for="enableAudio">Audio</label>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="enableAudio" checked>
+                    <span class="slider"></span>
+                </label>
+            </div>
+
+            <div class="control-group">
+                <h4>Controls</h4>
+                <ul>
+                    <li><b>D-Pad:</b> Arrow Keys</li>
+                    <li><b>A:</b> A Key</li>
+                    <li><b>B:</b> Z Key</li>
+                    <li><b>Start:</b> Enter</li>
+                    <li><b>Select:</b> Space</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Override the Init function from watboy.js to hook into the new controls
+        function Init() {
+            canvas = document.getElementById("myCanvas");
+            ctx = canvas.getContext("2d");
+            ctx.imageSmoothingEnabled = false;
+
+            // Hook up our new controls
+            document.getElementById("enableAudio").addEventListener("change", (evt) => {
+                gameboy.SetAudioEnabled(evt.target.checked);
+            });
+
+            document.getElementById("palette-select").addEventListener('change', (ev) => {
+                gameboy.SetColorPallete(parseInt(ev.target.value));
+            });
+
+            // Input setup
+            SetupKeyboardEvents();
+            SetupMouseEvents();
+
+            gameboy.Initialize(canvas, ctx);
+
+            // Hook up the ROM loader
+            document.getElementById('fileInput').addEventListener('change', (event) => {
+                loadROM(event.target.files[0], () => {
+                    if (requestAnimationFrameID !== -1) {
+                        cancelAnimationFrame(requestAnimationFrameID);
+                    }
+                    Start(); // This function is in watboy.js
+                    requestAnimationFrameID = requestAnimationFrame(Loop); // This function is also in watboy.js
+                });
+            });
+        }
+        // The rest of watboy.js will work as is, we just need to call our new Init.
+        window.onload = Init;
+    </script>
+</body>
+</html>
