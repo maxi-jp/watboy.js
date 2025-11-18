@@ -80,4 +80,10 @@ class GameBoy {
     SetColorPallete(id) {
         this.gpu.SetColorPallete(id);
     }
+
+    SetAudioEnabled(enabled) {
+        if (this.apu) {
+            this.apu.SetEnabled(enabled);
+        }
+    }
 }

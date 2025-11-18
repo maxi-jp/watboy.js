@@ -8,30 +8,15 @@ var ctx = /** @type {CanvasRenderingContext2D} */(null);
 
 var continousRun = true;
 var showFPS = true;
+var audioEnabled = true;
+var canvasScale = 1;
 
 var romInput = null;
 
 const gameboy = new GameBoy();
 
-const debugData = {
-    serial: null,
-    registers: {
-        a: null,
-        b: null,
-        c: null,
-        d: null,
-        e: null,
-        f: null,
-        h: null,
-        l: null,
-        sp: null,
-        pc: null,
-    },
-    flags: {
-        ie: null
-    },
-    lastInstruction: null
-}
+// updateDebugData stub function. If debugData.js is loaded, it will overwrite this.
+function updateDebugData() { }
 
 var requestAnimationFrameID = -1;
 
@@ -48,19 +33,23 @@ function Init() {
     ctx = canvas.getContext("2d");
     ctx.imageSmoothingEnabled = false;
 
-    // get html debug element references
-    debugData.serial = document.querySelector('#serial > span');
-    for (const prop in debugData.registers) {
-        debugData.registers[prop] = document.getElementById(`reg_${prop}`);
-    }
-    for (const prop in debugData.flags) {
-        debugData.flags[prop] = document.getElementById(`flags_${prop}`);
-    }
-    debugData.lastInstruction = document.getElementById('last_inst');
-
     // options
-    document.getElementById("showFPS").addEventListener("change", (evt) => {
+    document.getElementById("showFPS")?.addEventListener("change", (evt) => {
         showFPS = evt.target.checked;
+    });
+
+    document.getElementById("enableAudio")?.addEventListener("change", (evt) => {
+        audioEnabled = evt.target.checked;
+        gameboy.SetAudioEnabled(audioEnabled);
+    });
+
+    // canvas scale inputs
+    const scaleRadios = document.getElementsByName("scale");
+    scaleRadios.forEach((element) => {
+        element.addEventListener('change', (ev) => {
+            canvasScale = parseInt(ev.target.value);
+            updateCanvasScale();
+        });
     });
 
     // color palettes inputs
@@ -77,7 +66,7 @@ function Init() {
     SetupMouseEvents();
 
     gameboy.Initialize(canvas, ctx);
-    
+
     updateDebugData();
 
     // load BIOS file
@@ -144,6 +133,7 @@ function Loop(currentTime) {
 
 function Update() {
     gameboy.RunFrame();
+
     updateDebugData();
 }
 
@@ -209,37 +199,10 @@ function loadROM(file, onload) {
     reader.readAsArrayBuffer(file);
 }
 
-function updateDebugData() {
-    if (gameboy.cpu.serialBuffer !== '') {
-        if (debugData.serial.innerText !== gameboy.cpu.serialBuffer)
-            debugData.serial.classList.add('red');
-        else
-            debugData.serial.classList.remove('red');
-        debugData.serial.innerText = gameboy.cpu.serialBuffer;
-    }
-    else if (debugData.serial.classList.contains('red'))
-        debugData.serial.classList.remove('red');
-
-    for (const prop in debugData.registers) {
-        const val = gameboy.cpu.registers[prop.toUpperCase()];
-        const newStr = `0x${val.toString(16)} (${val})`;
-
-        if (debugData.registers[prop].innerText !== newStr)
-            debugData.registers[prop].classList.add('red');
-        else
-            debugData.registers[prop].classList.remove('red');
-        
-        debugData.registers[prop].innerText = newStr;
-    }
+function updateCanvasScale() {
+    canvas.classList.remove('scale-1x', 'scale-2x', 'scale-3x', 'scale-4x');
     
-    debugData.flags.ie.innerText = gameboy.cpu.interruptsEnabled;
-    
-    const newOpcode = `${gameboy.cpu.lastOpcodeHandlerName} (0x${gameboy.cpu.memory[gameboy.cpu.registers.lastPC].toString(16)})`;
-    if (debugData.lastInstruction.innerText !== newOpcode)
-        debugData.lastInstruction.classList.add('red');
-    else
-        debugData.lastInstruction.classList.remove('red');
-    debugData.lastInstruction.innerText = newOpcode;
+    canvas.classList.add(`scale-${canvasScale}x`);
 }
 
 const cartridgeHeaderAdress = [0x100, 0x14F];
@@ -256,4 +219,4 @@ const maskROMVersionNumberAdress = 0x14C;
 const headerChecksumAdress = 0x14D;
 const globalChecksumAdress = [0x14E, 0x14F];
 
-window.onload = Init;
+window.addEventListener('load', Init);

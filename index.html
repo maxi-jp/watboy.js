@@ -12,6 +12,7 @@
     <script src="joypad.js"></script>
     <script src="apu.js"></script>
     <script src="gameboy.js"></script>
+    <script src="debugData.js"></script>
     <script src="watboy.js"></script>
     <script src="input.js"></script>
 </head>
@@ -19,7 +20,20 @@
     <canvas id="myCanvas" width="160" height="144"></canvas>
     <div id="options">
         <input type="checkbox" name="showFPS" id="showFPS" checked/>
-        <label for="showFPS">Show FPS</label>
+        <label for="showFPS">Show FPS</label><br>
+        <input type="checkbox" name="enableAudio" id="enableAudio" checked/>
+        <label for="enableAudio">Enable Audio</label>
+    </div>
+    <div id="scale">
+        <p>Canvas Scale:</p>
+        <input type="radio" id="scale1" name="scale" value="1" checked/>
+        <label for="scale1">1x</label><br>
+        <input type="radio" id="scale2" name="scale" value="2"/>
+        <label for="scale2">2x</label><br>
+        <input type="radio" id="scale3" name="scale" value="3"/>
+        <label for="scale3">3x</label><br>
+        <input type="radio" id="scale4" name="scale" value="4"/>
+        <label for="scale4">4x</label><br>
     </div>
     <div id="palette">
         <p>Color palette:</p>

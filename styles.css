@@ -60,6 +60,7 @@ canvas {
     position: absolute;
     left: 20px;
     top: 40px;
+    text-align: left;
 }
 
 #palette {
@@ -69,4 +70,31 @@ canvas {
     text-align: left;
     width: 142px;
     font-size: 12px;
+}
+
+#scale {
+    position: absolute;
+    left: 20px;
+    top: 90px;
+    text-align: left;
+}
+
+canvas.scale-1x {
+    width: 160px;
+    height: 144px;
+}
+
+canvas.scale-2x {
+    width: 320px;
+    height: 288px;
+}
+
+canvas.scale-3x {
+    width: 480px;
+    height: 432px;
+}
+
+canvas.scale-4x {
+    width: 640px;
+    height: 576px;
 }

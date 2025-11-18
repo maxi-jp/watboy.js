@@ -466,8 +466,8 @@ class GameBoyCPU {
             return;
         }
 
-        // Sound registers (0xFF10 - 0xFF26)
-        if (address >= 0xFF10 && address <= 0xFF26) {
+        // Sound registers (0xFF10 - 0xFF26) and Wave Pattern RAM (0xFF30 - 0xFF3F)
+        if ((address >= 0xFF10 && address <= 0xFF26) || (address >= 0xFF30 && address <= 0xFF3F)) {
             this.apu.WriteRegister(address, value);
             // We still write to memory so other parts of the system can read it
         }
