@@ -6,7 +6,7 @@
 var canvas = /** @type {HTMLCanvasElement} */(null);
 var ctx = /** @type {CanvasRenderingContext2D} */(null);
 
-var debug = true;
+var continousRun = true;
 var showFPS = true;
 
 var romInput = null;
@@ -35,12 +35,13 @@ const debugData = {
 
 var requestAnimationFrameID = -1;
 
-var targetDT = 1/60; // 60fps
+const GB_FRAME_TIME = 1 / 59.7275; // ~0.01674 ms per frame
 var globalDT;
 var time = 0,
     fps = 0,
     framesAcum = 0,
     acumDelta = 0;
+    acumAux = 0;
 
 function Init() {
     canvas = document.getElementById("myCanvas");
@@ -87,61 +88,61 @@ function Init() {
     // room input field
     romInput = document.getElementById('fileInput');
     romInput.addEventListener('change', (event) => loadROM(event.target.files[0], () => {
+        if (requestAnimationFrameID !== -1)
+            cancelAnimationFrame(requestAnimationFrameID);
+
         Start();
-        setInterval(Loop, 1);
-        //Loop();
+        // setInterval(Loop, 1);
+        requestAnimationFrameID = requestAnimationFrame(Loop);
     }));
 }
 
 function Start() {
     // start the timer
     time = performance.now();
+    framesAcum = 0;
 }
 
-function Loop() {
-    // requestAnimationFrameID = requestAnimationFrame(Loop);
+function Loop(currentTime) {
+    requestAnimationFrameID = requestAnimationFrame(Loop);
 
     // compute FPS
-    let now = performance.now();
-    let deltaTime = (now - time) / 1000;
+    let deltaTime = (currentTime - time) / 1000;
     globalDT = deltaTime;
-
-    time = now;
+    time = currentTime;
 
     framesAcum++;
     acumDelta += deltaTime;
+    acumAux += deltaTime;
 
-    if (acumDelta >= 1) {
+    if (acumAux >= 1) {
         fps = framesAcum;
         framesAcum = 0;
-        acumDelta -= 1;
+        acumAux -= 1;
     }
 
     if (deltaTime > 1)
         return;
 
     if (Input.IsKeyDown(KEY_S))
-        debug = !debug;
+        continousRun = !continousRun;
 
-    if (!debug) {
-        // Game logic ---------
-        Update(deltaTime);
-        // Draw the game ------
-        Draw(ctx);
+    while (acumDelta >= GB_FRAME_TIME) {
+        if (continousRun || Input.IsKeyDown(KEY_D)) {
+            // Update the emulators state
+            Update();
+        }
+        acumDelta -= GB_FRAME_TIME;
     }
-    else if (Input.IsKeyDown(KEY_D)) {
-        // Game logic ---------
-        Update(deltaTime);
-        
-        // Draw the game ------
-        Draw(ctx);
-    }
+
+    // Draw logic
+    Draw(ctx);
 
     // reset input data ---
     Input.PostUpdate();
 }
 
-function Update(deltaTime) {
+function Update() {
     gameboy.RunFrame();
     updateDebugData();
 }
@@ -151,7 +152,7 @@ function Draw(/** @type {CanvasRenderingContext2D} */ctx) {
 
     gameboy.GPURender();
 
-    if(showFPS)
+    if (showFPS)
         DrawStats(ctx);
 }
 
